@@ -79,17 +79,6 @@ namespace Gurux.DLMS.Simulator.Net
                 server.Initialize(settings.Media, Settings.Trace, settings.InputFile, 1, false, null);
                 UpdateSettings(settings, server);
                 Console.WriteLine("----------------------------------------------------------");
-                ConsoleKey k;
-                while ((k = Console.ReadKey().Key) != ConsoleKey.Escape)
-                {
-                    if (k == ConsoleKey.Delete)
-                    {
-                        Console.Clear();
-                    }
-                    Console.WriteLine("Press Esc to close application or delete clear the console.");
-                }
-                //Close servers.
-                server.Close();
             }
             else
             {
@@ -184,24 +173,7 @@ namespace Gurux.DLMS.Simulator.Net
                             Console.WriteLine(str);
                         }
                     }
-
                 }
-                ConsoleKey k;
-                while ((k = Console.ReadKey().Key) != ConsoleKey.Escape)
-                {
-                    if (k == ConsoleKey.Delete)
-                    {
-                        Console.Clear();
-                    }
-                    Console.WriteLine("Press Esc to close application or delete clear the console.");
-                }
-                Console.WriteLine("Closing servers.");
-                //Close servers.
-                foreach (var server in servers)
-                {
-                    server.Close();
-                }
-                Console.WriteLine("Servers closed.");
             }
         }
 
