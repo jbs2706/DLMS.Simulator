@@ -51,52 +51,49 @@ namespace Gurux.DLMS.Simulator.Net
         
         public static void InitConfiguration(string[] args, Settings settings)
         {
-            List<GXCmdParameter> parameters = GXCommon.GetParameters(args, "h:p:c:s:r:i:It:a:wP:g:S:C:n:v:o:T:A:B:D:d:l:F:r:x:N:Xx:G:f:ub:W:w:L:R");
+            settings.Client.UseLogicalNameReferencing = true;
             
-            foreach (var it in parameters)
+            var config = GetConfig();
+
+            ArgumentNullException.ThrowIfNull(config.Portnumber);
+   
+            settings.Media ??= new GXNet();
+            var net = settings.Media as GXNet;
+            net!.Port = config.Portnumber.Value;
+
+            if (!string.IsNullOrEmpty(config.Password))
             {
-                switch (it.Tag)
-                {
-                    case 'r':
-                        if (string.Compare(it.Value, "sn", StringComparison.OrdinalIgnoreCase) == 0)
-                        {
-                            settings.Client.UseLogicalNameReferencing = false;
-                        }
-                        else if (string.Compare(it.Value, "ln", StringComparison.OrdinalIgnoreCase) == 0)
-                        {
-                            settings.Client.UseLogicalNameReferencing = true;
-                        }
-                        else
-                        {
-                            throw new ArgumentException("Invalid reference option.");
-                        }
-                        break;
-                    case 'p': //Port.
-                        settings.Media ??= new GXNet();
-                        var net = settings.Media as GXNet;
-                        net!.Port = int.Parse(it.Value);
-                        break;
-                    case 'P': //Password
-                        settings.Client.Password = Encoding.ASCII.GetBytes(it.Value);
-                        break;
-                    case 'i':
-                        try
-                        {
-                            settings.Client.InterfaceType = (InterfaceType)Enum.Parse(typeof(InterfaceType), it.Value);
-                        }
-                        catch (Exception)
-                        {
-                            throw new ArgumentException("Invalid interface type option. (HDLC, WRAPPER)");
-                        }
-                        break;
-                    case 'x':
-                        settings.InputFile = it.Value;
-                        break;
-                    case 'N':
-                        settings.ServerCount = int.Parse(it.Value);
-                        break;
-                }
+                settings.Client.Password = Encoding.ASCII.GetBytes(config.Password);
             }
+            
+            ArgumentException.ThrowIfNullOrWhiteSpace(config.Interface);
+            try
+            {
+                settings.Client.InterfaceType = (InterfaceType)Enum.Parse(typeof(InterfaceType), config.Interface);
+            }
+            catch (Exception)
+            {
+                throw new ArgumentException("Invalid interface type option. (HDLC, WRAPPER)");
+            }
+            
+            ArgumentException.ThrowIfNullOrWhiteSpace(config.TemplateFile); 
+            settings.InputFile = config.TemplateFile;
+                
+            settings.ServerCount = config.ServerCount;
+        }
+
+        private static MeterConfig GetConfig()
+        {
+            return new MeterConfig
+            {
+                Portnumber = 1000,
+                ServerCount = 10,
+                TemplateFile = "./hdlc_meter_template.xml",
+                Interface = "HDLC",
+                // TemplateFile = "./wrapper_meter_template.xml"
+                // Interface = "WRAPPER",
+                // Password = "foobaz"
+            };
         }
     }
 }
