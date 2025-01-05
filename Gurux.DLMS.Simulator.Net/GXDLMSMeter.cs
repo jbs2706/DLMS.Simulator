@@ -48,23 +48,23 @@ namespace Gurux.DLMS.Simulator.Net
     /// <summary>
     /// Simulated meter.
     /// </summary>
-    class GXDLMSMeter : GXDLMSSecureServer
+    internal class GXDLMSMeter : GXDLMSSecureServer
     {
         //Image to update.
-        string ImageUpdate = null;
+        private string ImageUpdate = null;
         //What is expected image size.
-        UInt32 ImageSize = 0;
+        private UInt32 ImageSize = 0;
 
         /// <summary>
         /// Application is closing
         /// </summary>
-        ManualResetEvent closing = new ManualResetEvent(false);
+        private ManualResetEvent closing = new ManualResetEvent(false);
         /// <summary>
         /// Server that is used to parse Gateway messages.
         /// </summary>
         public static GXDLMSMeter GatewayServer = null;
 
-        static Dictionary<object, GXByteBuffer> buffers = new Dictionary<object, GXByteBuffer>();
+        private static Dictionary<object, GXByteBuffer> buffers = new Dictionary<object, GXByteBuffer>();
 
         /// <summary>
         /// List of simulated meters.
@@ -81,22 +81,22 @@ namespace Gurux.DLMS.Simulator.Net
         /// </summary>
         public static Dictionary<object, GXDLMSMeter> connections = new Dictionary<object, GXDLMSMeter>();
 
-        static InterfaceType interfaceType;
+        private static InterfaceType interfaceType;
 
         //Are all meters using the same port.
-        bool Exclusive;
-        string objectsFile;
-        static TraceLevel Trace = TraceLevel.Error;
+        private bool Exclusive;
+        private string objectsFile;
+        private static TraceLevel Trace = TraceLevel.Error;
         /// <summary>
         /// Lock settings file when used.
         /// </summary>
         private static object settingsLock = new object();
 
-        IGXMedia Media = null;
+        private IGXMedia Media = null;
         /// <summary>
         /// Serial number of the meter.
         /// </summary>
-        UInt32 serialNumber;
+        private UInt32 serialNumber;
 
         ///<summary>
         /// Constructor.
@@ -137,21 +137,21 @@ namespace Gurux.DLMS.Simulator.Net
         /// Update simulated values for the meter instance.
         /// </summary>
         /// <param name="items">Simulated COSEM objects.</param>
-        void UpdateValues(GXDLMSObjectCollection items)
+        private void UpdateValues(GXDLMSObjectCollection items)
         {
             //Update COSEM Logical Device Name
-            GXDLMSData d = items.FindByLN(ObjectType.Data, "0.0.42.0.0.255") as GXDLMSData;
+            var d = items.FindByLN(ObjectType.Data, "0.0.42.0.0.255") as GXDLMSData;
             if (d != null && d.Value is string v)
             {
-                d.Value = string.Format("{0}{1}", v.Substring(0, 3), serialNumber.ToString("D13"));
+                d.Value = $"{v.Substring(0, 3)}{serialNumber.ToString("D13")}";
             }
 
             //Update Meter serial number.
             d = items.FindByLN(ObjectType.Data, "0.0.96.1.0.255") as GXDLMSData;
             if (d != null && d.Value is string v2)
             {
-                string tmp = "";
-                foreach (char it in v2)
+                var tmp = "";
+                foreach (var it in v2)
                 {
                     //Append chars.
                     if (it < 0x30 || it > 0x39)
@@ -177,14 +177,14 @@ namespace Gurux.DLMS.Simulator.Net
             {
                 if (File.Exists(path))
                 {
-                    GXDLMSObjectCollection objects = GXDLMSObjectCollection.Load(path);
+                    var objects = GXDLMSObjectCollection.Load(path);
                     items.Clear();
                     items.AddRange(objects);
                     //Add objects from profile generic that are not in association view.
                     foreach (GXDLMSProfileGeneric pg in objects.GetObjects(ObjectType.ProfileGeneric))
                     {
                         //Remove invalid rows.
-                        for (int pos = 0; pos != pg.Buffer.Count; ++pos)
+                        for (var pos = 0; pos != pg.Buffer.Count; ++pos)
                         {
                             if (pg.Buffer[pos].Length != pg.CaptureObjects.Count)
                             {
@@ -234,7 +234,7 @@ namespace Gurux.DLMS.Simulator.Net
                         bb = buffers[e.SenderInfo];
                     }
                     bb.Set((byte[])e.Data);
-                    GXServerReply sr = new GXServerReply(bb.Data);
+                    var sr = new GXServerReply(bb.Data);
                     GatewayServer.Reset();
                     try
                     {
@@ -256,9 +256,9 @@ namespace Gurux.DLMS.Simulator.Net
                     }
                     if (sr.Gateway != null && sr.Data != null)
                     {
-                        GXByteBuffer pdu = new GXByteBuffer(sr.Data);
-                        InterfaceType type = (InterfaceType)sr.Gateway.NetworkId;
-                        GXByteBuffer address = new GXByteBuffer();
+                        var pdu = new GXByteBuffer(sr.Data);
+                        var type = (InterfaceType)sr.Gateway.NetworkId;
+                        var address = new GXByteBuffer();
                         address.Set(sr.Gateway.PhysicalDeviceAddress);
                         int addr = address.GetUInt8();
                         //Find correct meter using GW information.
@@ -280,13 +280,13 @@ namespace Gurux.DLMS.Simulator.Net
                             {
                                 cl = clients[addr];
                             }
-                            GXReplyData data = new GXReplyData();
-                            GXReplyData notify = new GXReplyData();
-                            GXDLMSMeter m = meters[addr];
+                            var data = new GXReplyData();
+                            var notify = new GXReplyData();
+                            var m = meters[addr];
                             //Send SNRM if needed.
                             if (sr.Command == Command.Aarq && (type == InterfaceType.HDLC || type == InterfaceType.HdlcWithModeE))
                             {
-                                GXServerReply sr2 = new GXServerReply(cl.SNRMRequest());
+                                var sr2 = new GXServerReply(cl.SNRMRequest());
                                 m.HandleRequest(sr2);
                                 if (cl.GetData(sr2.Reply, data, notify))
                                 {
@@ -301,7 +301,7 @@ namespace Gurux.DLMS.Simulator.Net
                                 }
                             }
                             byte[][] frames = cl.CustomFrameRequest(Command.None, pdu);
-                            foreach (byte[] it in frames)
+                            foreach (var it in frames)
                             {
                                 sr.Data = it;
                                 m.HandleRequest(sr);
@@ -322,10 +322,10 @@ namespace Gurux.DLMS.Simulator.Net
                                         }
                                         cl.GetData(sr.Reply, data, notify);
                                     }
-                                    byte[] reply = sr.Reply;
+                                    var reply = sr.Reply;
                                     try
                                     {
-                                        GXByteBuffer tmp = new GXByteBuffer();
+                                        var tmp = new GXByteBuffer();
                                         tmp.Set(data.Data);
                                         GatewayServer.Gateway = sr.Gateway;
                                         reply = GatewayServer.CustomFrameRequest(Command.None, tmp);
@@ -366,8 +366,8 @@ namespace Gurux.DLMS.Simulator.Net
                     GXDLMSTranslator.GetAddressInfo(interfaceType, bb, out target, out source);
                     if (target != 0 && meters.ContainsKey(target))
                     {
-                        GXDLMSMeter m = meters[target];
-                        GXServerReply sr = new GXServerReply(bb.Data);
+                        var m = meters[target];
+                        var sr = new GXServerReply(bb.Data);
                         sr.ConnectionInfo = new GXDLMSConnectionEventArgs() { ConnectionInfo = e.SenderInfo };
                         do
                         {
@@ -443,14 +443,14 @@ namespace Gurux.DLMS.Simulator.Net
             }
         }
 
-        bool Init(bool exclusive)
+        private bool Init(bool exclusive)
         {
             //Load added objects.
             if (objectsFile != null)
             {
                 if (!LoadObjects(objectsFile, Items))
                 {
-                    throw new Exception(string.Format("Invalid device template file {0}", objectsFile));
+                    throw new Exception($"Invalid device template file {objectsFile}");
                 }
             }
             GXDLMSObjectCollection objs;
@@ -482,7 +482,7 @@ namespace Gurux.DLMS.Simulator.Net
             }
 
             //Update Logical Device Name so each meter has own unique name.
-            GXDLMSData data = (GXDLMSData)Items.FindByLN(ObjectType.Data, "0.0.42.0.0.255");
+            var data = (GXDLMSData)Items.FindByLN(ObjectType.Data, "0.0.42.0.0.255");
             if (data != null)
             {
                 data.Value = ASCIIEncoding.ASCII.GetBytes("GRX" + serialNumber);
@@ -491,7 +491,7 @@ namespace Gurux.DLMS.Simulator.Net
             //Create thread for every profile generic so values are captured if capture period is given.
             new Thread(() =>
             {
-                int wt = 0;
+                var wt = 0;
                 do
                 {
                     wt = Run(closing);
@@ -506,10 +506,10 @@ namespace Gurux.DLMS.Simulator.Net
             //Own listener isn't created if there are multiple meters in the same port.
             if (!exclusive)
             {
-                Media.OnReceived += new ReceivedEventHandler(OnReceived);
-                Media.OnClientConnected += new ClientConnectedEventHandler(OnClientConnected);
-                Media.OnClientDisconnected += new ClientDisconnectedEventHandler(OnClientDisconnected);
-                Media.OnError += new Common.ErrorEventHandler(OnError);
+                Media.OnReceived += OnReceived;
+                Media.OnClientConnected += OnClientConnected;
+                Media.OnClientDisconnected += OnClientDisconnected;
+                Media.OnError += OnError;
                 Media.OnMediaStateChange += Media_OnMediaStateChange;
             }
             if (!Media.IsOpen)
@@ -556,11 +556,11 @@ namespace Gurux.DLMS.Simulator.Net
         /// <param name="e"></param>
         protected override void PreRead(ValueEventArgs[] args)
         {
-            foreach (ValueEventArgs it in args)
+            foreach (var it in args)
             {
                 if (Trace > TraceLevel.Warning)
                 {
-                    System.Diagnostics.Debug.WriteLine("PreRead {0}:{1}", it.Target.LogicalName, it.Index);
+                    Debug.WriteLine("PreRead {0}:{1}", it.Target.LogicalName, it.Index);
                 }
                 //Update date-time of the clock object when client asks it.
                 if ((it.Target is GXDLMSClock c) && it.Index == 2)
@@ -574,30 +574,30 @@ namespace Gurux.DLMS.Simulator.Net
 
         protected override void PostRead(ValueEventArgs[] args)
         {
-            foreach (ValueEventArgs it in args)
+            foreach (var it in args)
             {
                 if (Trace > TraceLevel.Warning)
                 {
-                    System.Diagnostics.Debug.WriteLine("PostRead {0}:{1}", it.Target.LogicalName, it.Index);
+                    Debug.WriteLine("PostRead {0}:{1}", it.Target.LogicalName, it.Index);
                 }
             }
         }
 
         protected override void PreWrite(ValueEventArgs[] args)
         {
-            foreach (ValueEventArgs it in args)
+            foreach (var it in args)
             {
                 if (Trace > TraceLevel.Warning)
                 {
-                    System.Diagnostics.Debug.WriteLine("PreWrite {0}:{1}", it.Target.LogicalName, it.Index);
+                    Debug.WriteLine("PreWrite {0}:{1}", it.Target.LogicalName, it.Index);
                 }
             }
         }
 
         protected override void PostWrite(ValueEventArgs[] args)
         {
-            GXXmlWriterSettings settings = new GXXmlWriterSettings();
-            foreach (ValueEventArgs it in args)
+            var settings = new GXXmlWriterSettings();
+            foreach (var it in args)
             {
                 if (it.Error != ErrorCode.Ok)
                 {
@@ -614,21 +614,21 @@ namespace Gurux.DLMS.Simulator.Net
         {
         }
 
-        void SendPush(GXDLMSPushSetup target)
+        private void SendPush(GXDLMSPushSetup target)
         {
-            int pos = target.Destination.IndexOf(':');
+            var pos = target.Destination.IndexOf(':');
             if (pos == -1)
             {
                 throw new ArgumentException("Invalid destination.");
             }
             byte[][] data = GeneratePushSetupMessages(DateTime.MinValue, target);
-            string host = target.Destination.Substring(0, pos);
-            int port = int.Parse(target.Destination.Substring(pos + 1));
-            GXNet net = new GXNet(NetworkType.Tcp, host, port);
+            var host = target.Destination.Substring(0, pos);
+            var port = int.Parse(target.Destination.Substring(pos + 1));
+            var net = new GXNet(NetworkType.Tcp, host, port);
             try
             {
                 net.Open();
-                foreach (byte[] it in data)
+                foreach (var it in data)
                 {
                     net.Send(it, null);
                 }
@@ -641,11 +641,11 @@ namespace Gurux.DLMS.Simulator.Net
 
         protected override void PreAction(ValueEventArgs[] args)
         {
-            foreach (ValueEventArgs it in args)
+            foreach (var it in args)
             {
                 if (Trace > TraceLevel.Warning)
                 {
-                    System.Diagnostics.Debug.WriteLine("PreAction {0}:{1}", it.Target.LogicalName, it.Index);
+                    Debug.WriteLine("PreAction {0}:{1}", it.Target.LogicalName, it.Index);
                 }
                 if ((it.Target is GXDLMSProfileGeneric pg) && it.Index == 2)
                 {
@@ -675,7 +675,7 @@ namespace Gurux.DLMS.Simulator.Net
 
                 if (it.Target is GXDLMSImageTransfer)
                 {
-                    GXDLMSImageTransfer i = it.Target as GXDLMSImageTransfer;
+                    var i = it.Target as GXDLMSImageTransfer;
                     //Image name and size to transfer
                     if (it.Index == 1)
                     {
@@ -683,8 +683,8 @@ namespace Gurux.DLMS.Simulator.Net
                         i.ImageActivateInfo = null;
                         ImageUpdate = ASCIIEncoding.ASCII.GetString((byte[])(it.Parameters as List<object>)[0]);
                         ImageSize = Convert.ToUInt32((it.Parameters as List<object>)[1]);
-                        string file = Path.Combine(Path.GetDirectoryName(typeof(GXDLMSMeter).Assembly.Location), ImageUpdate + ".exe");
-                        System.Diagnostics.Debug.WriteLine("Updating image" + ImageUpdate + " Size:" + ImageSize);
+                        var file = Path.Combine(Path.GetDirectoryName(typeof(GXDLMSMeter).Assembly.Location), ImageUpdate + ".exe");
+                        Debug.WriteLine("Updating image" + ImageUpdate + " Size:" + ImageSize);
                         using (var writer = File.Create(file))
                         {
                         }
@@ -693,25 +693,25 @@ namespace Gurux.DLMS.Simulator.Net
                     else if (it.Index == 2)
                     {
                         i.ImageTransferStatus = ImageTransferStatus.TransferInitiated;
-                        string file = Path.Combine(Path.GetDirectoryName(typeof(GXDLMSMeter).Assembly.Location), ImageUpdate + ".exe");
+                        var file = Path.Combine(Path.GetDirectoryName(typeof(GXDLMSMeter).Assembly.Location), ImageUpdate + ".exe");
                         List<object> p = (List<object>)it.Parameters;
                         try
                         {
-                            using (FileStream fs = new FileStream(file, FileMode.Append))
+                            using (var fs = new FileStream(file, FileMode.Append))
                             {
-                                using (BinaryWriter writer = new BinaryWriter(fs))
+                                using (var writer = new BinaryWriter(fs))
                                 {
                                     writer.Write((byte[])p[1]);
                                 }
                                 fs.Close();
                             }
                         }
-                        catch (System.IO.IOException)
+                        catch (IOException)
                         {
                             Thread.Sleep(1000);
-                            using (FileStream fs = new FileStream(file, FileMode.Append))
+                            using (var fs = new FileStream(file, FileMode.Append))
                             {
-                                using (BinaryWriter writer = new BinaryWriter(fs))
+                                using (var writer = new BinaryWriter(fs))
                                 {
                                     writer.Write((byte[])p[1]);
                                 }
@@ -722,13 +722,13 @@ namespace Gurux.DLMS.Simulator.Net
                     //Verifies the integrity of the Image before activation.
                     else if (it.Index == 3)
                     {
-                        string file = Path.Combine(Path.GetDirectoryName(typeof(GXDLMSMeter).Assembly.Location), ImageUpdate + ".exe");
-                        bool init = i.ImageTransferStatus == ImageTransferStatus.TransferInitiated;
+                        var file = Path.Combine(Path.GetDirectoryName(typeof(GXDLMSMeter).Assembly.Location), ImageUpdate + ".exe");
+                        var init = i.ImageTransferStatus == ImageTransferStatus.TransferInitiated;
                         if (init)
                         {
                             i.ImageTransferStatus = ImageTransferStatus.VerificationInitiated;
                             //Check that size match.
-                            uint size = (uint)new FileInfo(file).Length;
+                            var size = (uint)new FileInfo(file).Length;
                             if (size != ImageSize)
                             {
                                 i.ImageTransferStatus = ImageTransferStatus.VerificationFailed;
@@ -736,7 +736,7 @@ namespace Gurux.DLMS.Simulator.Net
                             }
                             else
                             {
-                                Thread t = new Thread(() =>
+                                var t = new Thread(() =>
                                 {
                                     //Wait 5 seconds before image is verified.
                                     Thread.Sleep(5000);
@@ -756,11 +756,11 @@ namespace Gurux.DLMS.Simulator.Net
                     //Activates the Image.
                     else if (it.Index == 4)
                     {
-                        bool init = i.ImageTransferStatus == ImageTransferStatus.VerificationSuccessful;
+                        var init = i.ImageTransferStatus == ImageTransferStatus.VerificationSuccessful;
                         if (init)
                         {
                             i.ImageTransferStatus = ImageTransferStatus.ActivationInitiated;
-                            Thread t = new Thread(() =>
+                            var t = new Thread(() =>
                             {
                                 //Wait 5 seconds before image is activated.
                                 Thread.Sleep(5000);
@@ -783,7 +783,7 @@ namespace Gurux.DLMS.Simulator.Net
 
         protected override void PostAction(ValueEventArgs[] args)
         {
-            foreach (ValueEventArgs it in args)
+            foreach (var it in args)
             {
                 //Image update returns TemporaryFailure if image verify or acticvation is not finished.
                 if (it.Error != ErrorCode.Ok && !(it.Target is GXDLMSImageTransfer))
@@ -796,7 +796,7 @@ namespace Gurux.DLMS.Simulator.Net
                 // Save value if it's updated with action.
                 if (IsChangedWithAction(it.Target.ObjectType, it.Index))
                 {
-                    GXXmlWriterSettings settings = new GXXmlWriterSettings();
+                    var settings = new GXXmlWriterSettings();
                     Items.Save(objectsFile, settings);
                 }
                 if (it.Target is GXDLMSSecuritySetup && it.Index == 2)
@@ -827,7 +827,7 @@ namespace Gurux.DLMS.Simulator.Net
                 }
                 AssignedAssociation = null;
             }
-            bool ret = false;
+            var ret = false;
             //Check HDLC station address if it's used.
             if (InterfaceType == InterfaceType.HDLC &&
                     Hdlc != null && Hdlc.DeviceAddress != 0)
@@ -839,7 +839,7 @@ namespace Gurux.DLMS.Simulator.Net
                 (serverAddress & 0x3FFF) == serialNumber % 10000 + 1000))
             {
                 // Find address from the SAP table.
-                GXDLMSObjectCollection saps = Items.GetObjects(ObjectType.SapAssignment);
+                var saps = Items.GetObjects(ObjectType.SapAssignment);
                 if (saps.Count != 0)
                 {
                     foreach (GXDLMSSapAssignment sap in saps)
@@ -963,11 +963,11 @@ namespace Gurux.DLMS.Simulator.Net
         {
             if (objectType == ObjectType.AssociationLogicalName)
             {
-                foreach (GXDLMSObject it in Items)
+                foreach (var it in Items)
                 {
                     if (it.ObjectType == ObjectType.AssociationLogicalName)
                     {
-                        GXDLMSAssociationLogicalName a = (GXDLMSAssociationLogicalName)it;
+                        var a = (GXDLMSAssociationLogicalName)it;
                         if (a.ClientSAP == Settings.ClientAddress
                                 && a.AuthenticationMechanismName.MechanismId == Settings.Authentication
                                 && (ln == a.LogicalName || ln == "0.0.40.0.0.255"))
@@ -1040,7 +1040,7 @@ namespace Gurux.DLMS.Simulator.Net
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="e"></param>
-        void OnReceived(object sender, ReceiveEventArgs e)
+        private void OnReceived(object sender, ReceiveEventArgs e)
         {
             try
             {
@@ -1052,7 +1052,7 @@ namespace Gurux.DLMS.Simulator.Net
                     {
                         Console.WriteLine("RX:\t" + GXCommon.ToHex((byte[])e.Data, true));
                     }
-                    GXServerReply sr = new GXServerReply((byte[])e.Data);
+                    var sr = new GXServerReply((byte[])e.Data);
                     sr.ConnectionInfo = new GXDLMSConnectionEventArgs() { ConnectionInfo = e.SenderInfo };
                     do
                     {
@@ -1141,7 +1141,7 @@ namespace Gurux.DLMS.Simulator.Net
 
         protected override void Disconnected(GXDLMSConnectionEventArgs e)
         {
-            if (Trace > TraceLevel.Warning && this.ConnectionState != ConnectionState.None)
+            if (Trace > TraceLevel.Warning && ConnectionState != ConnectionState.None)
             {
                 Console.WriteLine("Client Disconnected");
             }

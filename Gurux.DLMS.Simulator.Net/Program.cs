@@ -36,66 +36,25 @@ using Gurux.DLMS.Enums;
 using Gurux.DLMS.Objects;
 using Gurux.Net;
 using Gurux.Serial;
-using System.IO;
 using System.Text;
 
 namespace Gurux.DLMS.Simulator.Net
 {
-    class Program
+    internal class Program
     {
-        /// <summary>
-        /// Read simulated values from the meter.
-        /// </summary>
-        static void ReadSimulatedValues(Settings settings)
-        {
-            Reader.GXDLMSReader reader = null;
-            try
-            {
-                ////////////////////////////////////////
-                //Initialise connection settings.
-                if (settings.media is GXSerial)
-                {
-                }
-                else if (settings.media is GXNet)
-                {
-                }
-                else
-                {
-                    throw new Exception("Unknown media type.");
-                }
-                ////////////////////////////////////////
-                reader = new Reader.GXDLMSReader(settings.client, settings.media, settings.trace, settings.invocationCounter);
-                if (settings.gatewaySettings != null)
-                {
-                    settings.client.Gateway.NetworkId = Convert.ToByte(settings.gatewaySettings);
-                }
-                settings.media.Open();
-                //Some meters need a break here.
-                Thread.Sleep(1000);
-                reader.ReadAll(settings.outputFile);
-            }
-            finally
-            {
-                if (reader != null)
-                {
-                    reader.Close();
-                }
-            }
-        }
-
         /// <summary>
         /// Password are given as command line parameters 
         /// because they can't read from the meter.
         /// </summary>
         /// <param name="settings"></param>
         /// <param name="server"></param>
-        static private void UpdateSettings(Settings settings, GXDLMSMeter server)
+        private static void UpdateSettings(Settings settings, GXDLMSMeter server)
         {
-            if (settings.client.Password != null)
+            if (settings.Client.Password != null)
             {
                 foreach (GXDLMSAssociationLogicalName it in server.Items.GetObjects(ObjectType.AssociationLogicalName))
                 {
-                    it.Secret = settings.client.Password;
+                    it.Secret = settings.Client.Password;
                 }
             }
         }
@@ -103,21 +62,21 @@ namespace Gurux.DLMS.Simulator.Net
         /// <summary>
         /// Start simulator.
         /// </summary>
-        static void StartSimulator(Settings settings)
+        private static void StartSimulator(Settings settings)
         {
-            if (settings.media is GXSerial)
+            if (settings.Media is GXSerial)
             {
-                GXDLMSMeter server = new GXDLMSMeter(settings.client.UseLogicalNameReferencing, settings.client.InterfaceType,
-                                                        settings.client.UseUtc2NormalTime, settings.client.ManufacturerId);
-                if (settings.client.UseLogicalNameReferencing)
+                var server = new GXDLMSMeter(settings.Client.UseLogicalNameReferencing, settings.Client.InterfaceType,
+                                                        settings.Client.UseUtc2NormalTime, settings.Client.ManufacturerId);
+                if (settings.Client.UseLogicalNameReferencing)
                 {
-                    Console.WriteLine("Logical Name DLMS Server in serial port {0} using {1}.", settings.media, settings.client.InterfaceType);
+                    Console.WriteLine("Logical Name DLMS Server in serial port {0} using {1}.", settings.Media, settings.Client.InterfaceType);
                 }
                 else
                 {
-                    Console.WriteLine("Short Name DLMS Server in serial port {0} using {1}.", settings.media, settings.client.InterfaceType);
+                    Console.WriteLine("Short Name DLMS Server in serial port {0} using {1}.", settings.Media, settings.Client.InterfaceType);
                 }
-                server.Initialize(settings.media, settings.trace, settings.inputFile, 1, false, null);
+                server.Initialize(settings.Media, Settings.Trace, settings.InputFile, 1, false, null);
                 UpdateSettings(settings, server);
                 Console.WriteLine("----------------------------------------------------------");
                 ConsoleKey k;
@@ -138,13 +97,9 @@ namespace Gurux.DLMS.Simulator.Net
                 //4059 is Official DLMS port.
                 ///////////////////////////////////////////////////////////////////////
                 //Create Gurux DLMS server component for Short Name and start listen events.
-                List<GXDLMSMeter> servers = new List<GXDLMSMeter>();
-                string str = "DLMS " + settings.client.InterfaceType;
-                if (settings.gatewaySettings != null)
-                {
-                    str += " Gateway for " + settings.gatewaySettings + " meters.";
-                }
-                if (settings.client.UseLogicalNameReferencing)
+                List<GXDLMSMeter> servers = [];
+                var str = "DLMS " + settings.Client.InterfaceType;
+                if (settings.Client.UseLogicalNameReferencing)
                 {
                     str += " Logical Name ";
                 }
@@ -152,84 +107,43 @@ namespace Gurux.DLMS.Simulator.Net
                 {
                     str += " Short Name ";
                 }
-                GXNet net = (GXNet)settings.media;
+                var net = (GXNet)settings.Media;
                 net.Server = true;
-                if (settings.exclusive)
-                {
-                    Console.WriteLine(str + "simulator start in port {0} implementing {1} meters.", net.Port, settings.serverCount);
-                    if (settings.gatewaySettings != null)
-                    {
-                        net.OnReceived += new Gurux.Common.ReceivedEventHandler(GXDLMSMeter.OnGatewayReceived);
-                        GXDLMSMeter.GatewayServer = new GXDLMSMeter(settings.client.UseLogicalNameReferencing, settings.client.InterfaceType,
-                                                                    settings.client.UseUtc2NormalTime, 
-                                                                    settings.client.ManufacturerId);
-                        GXDLMSMeter.GatewayServer.Initialize();
-                        UpdateSettings(settings, GXDLMSMeter.GatewayServer);
-                        settings.client.InterfaceType = (InterfaceType)settings.gatewaySettings;
-                    }
-                    else
-                    {
-                        net.OnReceived += new Gurux.Common.ReceivedEventHandler(GXDLMSMeter.OnExclusiveReceived);
-                    }
-                    net.OnClientConnected += GXDLMSMeter.OnClientConnected;
-                    net.OnClientDisconnected += GXDLMSMeter.OnClientDisconnected;
-                    net.OnError += new Gurux.Common.ErrorEventHandler(GXDLMSMeter.OnError);
-                }
-                else
-                {
-                    Console.WriteLine(str + "simulator start in {0} ports {1}-{2}.", net.Protocol, net.Port, net.Port + settings.serverCount - 1);
-                }
-                int index = 0;
-                if (settings.useSerialNumberAsMeterAddress)
-                {
-                    index = settings.client.Settings.ServerAddress - 1;
-                }
-                GXDLMSObjectCollection sharedObjects = null;
-                for (int pos = 0; pos != settings.serverCount; ++pos)
+                Console.WriteLine(str + "simulator start in {0} ports {1}-{2}.", net.Protocol, net.Port, net.Port + settings.ServerCount - 1);
+                
+                var index = 0;
+                GXDLMSObjectCollection? sharedObjects = null;
+                for (var pos = 0; pos != settings.ServerCount; ++pos)
                 {
                     ++index;
-                    GXDLMSMeter server = new GXDLMSMeter(settings.client.UseLogicalNameReferencing, settings.client.InterfaceType,
-                                                        settings.client.UseUtc2NormalTime, settings.client.ManufacturerId);
+                    var server = new GXDLMSMeter(settings.Client.UseLogicalNameReferencing, settings.Client.InterfaceType,
+                                                        settings.Client.UseUtc2NormalTime, settings.Client.ManufacturerId);
                     servers.Add(server);
-                    if (settings.SharedObjects && settings.inputFile != null)
+
+                    try
                     {
-                        sharedObjects = new GXDLMSObjectCollection();
-                        server.LoadObjects(settings.inputFile, sharedObjects);
-                        settings.inputFile = null;
+                        server.Initialize(new GXNet(net.Protocol, net.Port + pos), Settings.Trace, 
+                            settings.InputFile, (UInt32)index + 1, 
+                            false, sharedObjects);
                     }
-                    if (settings.exclusive)
+                    catch (System.Net.Sockets.SocketException ex)
                     {
-                        server.Initialize(net, settings.trace, 
-                            settings.inputFile, (UInt32) index, 
-                            settings.exclusive, sharedObjects);
-                        GXDLMSMeter.meters.Add(index, server);
+                        Console.WriteLine($"Port {net.Port + pos} already in use.");
                     }
-                    else
-                    {
-                        try
-                        {
-                            server.Initialize(new GXNet(net.Protocol, net.Port + pos), settings.trace, 
-                                settings.inputFile, (UInt32)index + 1, 
-                                settings.exclusive, sharedObjects);
-                        }
-                        catch (System.Net.Sockets.SocketException ex)
-                        {
-                            Console.WriteLine(string.Format("Port {0} already in use.", net.Port + pos));
-                        }
-                    }
+                    
                     UpdateSettings(settings, server);
-                    if (pos == 0 && settings.client.UseLogicalNameReferencing)
+                    if (pos == 0 && settings.Client.UseLogicalNameReferencing)
                     {
-                        str = "Server address: " + settings.client.ServerAddress.ToString();
+                        str = "Server address: " + settings.Client.ServerAddress.ToString();
                         Console.WriteLine(str);
                         Console.WriteLine("Associations:");
                         foreach (GXDLMSAssociationLogicalName it in server.Items.GetObjects(ObjectType.AssociationLogicalName))
                         {
                             str = "++++++++++++++++++++++++++++" + Environment.NewLine;
                             //Overwrite the password.
-                            if (settings.client.Password != null && settings.client.Password.Length != 0)
+                            if (settings.Client.Password != null && settings.Client.Password.Length != 0)
                             {
-                                it.Secret = settings.client.Password;
+                                it.Secret = settings.Client.Password;
                             }
                             str += "Client address: " + it.ClientSAP.ToString();
                             if (it.AuthenticationMechanismName.MechanismId == Authentication.None)
@@ -238,18 +152,17 @@ namespace Gurux.DLMS.Simulator.Net
                             }
                             else
                             {
-                                str += string.Format(" {0} authentication",
-                                    it.AuthenticationMechanismName.MechanismId);
+                                str += $" {it.AuthenticationMechanismName.MechanismId} authentication";
                                 if (it.Secret != null)
                                 {
-                                    str += string.Format(", password {0}", ASCIIEncoding.ASCII.GetString(it.Secret));
+                                    str += $", password {Encoding.ASCII.GetString(it.Secret)}";
                                 }
                             }
                             str += Environment.NewLine + " Conformance:" + Environment.NewLine;
                             str += it.XDLMSContextInfo.Conformance + Environment.NewLine;
                             str += " MaxReceivePduSize: " + it.XDLMSContextInfo.MaxReceivePduSize;
                             str += " MaxSendPduSize: " + it.XDLMSContextInfo.MaxSendPduSize + Environment.NewLine;
-                            GXDLMSSecuritySetup ss = server.Items.FindByLN(ObjectType.SecuritySetup, it.SecuritySetupReference) as GXDLMSSecuritySetup;
+                            var ss = server.Items.FindByLN(ObjectType.SecuritySetup, it.SecuritySetupReference) as GXDLMSSecuritySetup;
                             if (ss != null)
                             {
                                 str += Environment.NewLine;
@@ -267,12 +180,7 @@ namespace Gurux.DLMS.Simulator.Net
                                 }
                                 str += Environment.NewLine;
                             }
-                            if (settings.SharedObjects)
-                            {
-                                str = "++++++++++++++++++++++++++++" + Environment.NewLine;
-                                str += "All meters are sharing the COSEM objects.";
-                                str += Environment.NewLine;
-                            }
+   
                             Console.WriteLine(str);
                         }
                     }
@@ -289,7 +197,7 @@ namespace Gurux.DLMS.Simulator.Net
                 }
                 Console.WriteLine("Closing servers.");
                 //Close servers.
-                foreach (GXDLMSMeter server in servers)
+                foreach (var server in servers)
                 {
                     server.Close();
                 }
@@ -297,23 +205,13 @@ namespace Gurux.DLMS.Simulator.Net
             }
         }
 
-        static int Main(string[] args)
+        private static int Main(string[] args)
         {
             try
             {
-                Settings settings = new Settings();
-                int ret = Settings.GetParameters(args, settings);
-                if (ret != 0)
-                {
-                    return ret;
-                }
-                if (!string.IsNullOrEmpty(settings.outputFile))
-                {
-                    ReadSimulatedValues(settings);
-                    Console.WriteLine("----------------------------------------------------------");
-                    Console.WriteLine("Simulator template is created: " + settings.outputFile);
-                }
-                else if (!string.IsNullOrEmpty(settings.inputFile))
+                var settings = new Settings();
+                Settings.InitConfiguration(args, settings);
+                if (!string.IsNullOrEmpty(settings.InputFile))
                 {
                     StartSimulator(settings);
                 }
@@ -322,12 +220,12 @@ namespace Gurux.DLMS.Simulator.Net
                     Console.WriteLine("Device values file is not given.");
                 }
             }
-            catch (System.IO.IOException ex)
+            catch (IOException ex)
             {
                 Console.WriteLine("----------------------------------------------------------");
                 Console.WriteLine(ex.Message);
                 Console.WriteLine("Available ports:");
-                Console.WriteLine(string.Join(" ", Gurux.Serial.GXSerial.GetPortNames()));
+                Console.WriteLine(string.Join(" ", GXSerial.GetPortNames()));
                 return 1;
             }
             catch (Exception ex)

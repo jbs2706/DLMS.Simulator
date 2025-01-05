@@ -1,0 +1,6 @@
+﻿services:
+  gurux.dlms.simulator.net:
+    image: gurux.dlms.simulator.net
+    build:
+      context: .
+      dockerfile: Dockerfile
