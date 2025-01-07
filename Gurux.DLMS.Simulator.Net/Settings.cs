@@ -39,61 +39,63 @@ using Gurux.Net;
 using System.Diagnostics;
 using System.Text;
 
-namespace Gurux.DLMS.Simulator.Net
+namespace Gurux.DLMS.Simulator.Net;
+
+internal class Settings
 {
-    internal class Settings
+    private const string PortnumberEnvName = "DLMS_SIMULATOR_PORT";
+    private const string ServerCountEnvName = "DLMS_SIMULATOR_SERVER_COUNT";
+    private const string InterfaceEnvName = "DLMS_SIMULATOR_Interface";
+    private const string PasswordEnvName = "DLMS_SIMULATOR_PASSWORD";
+    
+    public readonly GXDLMSSecureClient Client = new(true);
+    public const TraceLevel Trace = TraceLevel.Verbose;
+    public IGXMedia? Media;
+    public int ServerCount = 1;
+    public const string InputFile = "./dlms-meter-template.xml";
+
+    public static Settings InitConfigurationAsync()
     {
-        public readonly GXDLMSSecureClient Client = new(true);
-        public const TraceLevel Trace = TraceLevel.Verbose;
-        public IGXMedia? Media;
-        public int ServerCount = 1;
-        public string? InputFile;
+        var settings = new Settings();
         
-        public static void InitConfiguration(string[] args, Settings settings)
+        if (!File.Exists("./dlms-meter-template.xml"))
         {
-            settings.Client.UseLogicalNameReferencing = true;
-            
-            var config = GetConfig();
-
-            ArgumentNullException.ThrowIfNull(config.Portnumber);
+            throw new FileNotFoundException($"dlms-meter-template.xml not found in current dictionary {Directory.GetCurrentDirectory()}");
+        }
+        
+        settings.Client.UseLogicalNameReferencing = true;
+        
+        var portnumber = Environment.GetEnvironmentVariable(PortnumberEnvName);
+        ArgumentNullException.ThrowIfNull(portnumber);
    
-            settings.Media ??= new GXNet();
-            var net = settings.Media as GXNet;
-            net!.Port = config.Portnumber.Value;
+        settings.Media ??= new GXNet();
+        var net = settings.Media as GXNet;
+        net!.Port = int.Parse(portnumber);
 
-            if (!string.IsNullOrEmpty(config.Password))
-            {
-                settings.Client.Password = Encoding.ASCII.GetBytes(config.Password);
-            }
-            
-            ArgumentException.ThrowIfNullOrWhiteSpace(config.Interface);
-            try
-            {
-                settings.Client.InterfaceType = (InterfaceType)Enum.Parse(typeof(InterfaceType), config.Interface);
-            }
-            catch (Exception)
-            {
-                throw new ArgumentException("Invalid interface type option. (HDLC, WRAPPER)");
-            }
-            
-            ArgumentException.ThrowIfNullOrWhiteSpace(config.TemplateFile); 
-            settings.InputFile = config.TemplateFile;
-                
-            settings.ServerCount = config.ServerCount;
-        }
-
-        private static MeterConfig GetConfig()
+        var password = Environment.GetEnvironmentVariable(PasswordEnvName);
+        
+        if (!string.IsNullOrEmpty(password))
         {
-            return new MeterConfig
-            {
-                Portnumber = 1000,
-                ServerCount = 10,
-                TemplateFile = "./hdlc_meter_template.xml",
-                Interface = "HDLC",
-                // TemplateFile = "./wrapper_meter_template.xml"
-                // Interface = "WRAPPER",
-                // Password = "foobaz"
-            };
+            settings.Client.Password = Encoding.ASCII.GetBytes(password);
         }
+            
+        var dlmsInterface = Environment.GetEnvironmentVariable(InterfaceEnvName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(dlmsInterface);
+        
+        try
+        {
+            settings.Client.InterfaceType = (InterfaceType)Enum.Parse(typeof(InterfaceType), dlmsInterface);
+        }
+        catch (Exception)
+        {
+            throw new ArgumentException("Invalid interface type option. (HDLC, WRAPPER)");
+        }
+            
+        var serverCount = Environment.GetEnvironmentVariable(ServerCountEnvName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(serverCount);
+        
+        settings.ServerCount = int.Parse(serverCount);
+
+        return settings;
     }
 }

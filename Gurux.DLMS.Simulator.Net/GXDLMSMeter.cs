@@ -43,1114 +43,1113 @@ using System.IO.Ports;
 using Gurux.DLMS.Objects.Enums;
 using System.Text;
 
-namespace Gurux.DLMS.Simulator.Net
+namespace Gurux.DLMS.Simulator.Net;
+
+/// <summary>
+/// Simulated meter.
+/// </summary>
+internal class GXDLMSMeter : GXDLMSSecureServer
 {
+    //Image to update.
+    private string ImageUpdate = null;
+    //What is expected image size.
+    private UInt32 ImageSize = 0;
+
     /// <summary>
-    /// Simulated meter.
+    /// Application is closing
     /// </summary>
-    internal class GXDLMSMeter : GXDLMSSecureServer
+    private ManualResetEvent closing = new ManualResetEvent(false);
+    /// <summary>
+    /// Server that is used to parse Gateway messages.
+    /// </summary>
+    public static GXDLMSMeter GatewayServer = null;
+
+    private static Dictionary<object, GXByteBuffer> buffers = new Dictionary<object, GXByteBuffer>();
+
+    /// <summary>
+    /// List of simulated meters.
+    /// </summary>
+    public static Dictionary<int, GXDLMSMeter> meters = new Dictionary<int, GXDLMSMeter>();
+
+    /// <summary>
+    /// List of gateway clients.
+    /// </summary>
+    public static Dictionary<int, GXDLMSClient> clients = new Dictionary<int, GXDLMSClient>();
+
+    /// <summary>
+    /// List of connections. This is used to close connection if meter is leave without diconnect.
+    /// </summary>
+    public static Dictionary<object, GXDLMSMeter> connections = new Dictionary<object, GXDLMSMeter>();
+
+    private static InterfaceType interfaceType;
+
+    //Are all meters using the same port.
+    private bool Exclusive;
+    private string objectsFile;
+    private static TraceLevel Trace = TraceLevel.Error;
+    /// <summary>
+    /// Lock settings file when used.
+    /// </summary>
+    private static object settingsLock = new object();
+
+    private IGXMedia Media = null;
+    /// <summary>
+    /// Serial number of the meter.
+    /// </summary>
+    private UInt32 serialNumber;
+
+    ///<summary>
+    /// Constructor.
+    ///</summary>
+    ///<param name="logicalNameReferencing">Is logical name referencing used.</param>
+    ///<param name="type">Interface type.</param>
+    ///<param name="useUtc2NormalTime">Is UTC time used.</param>
+    ///<param name="flagId">Flag ID.</param>
+    public GXDLMSMeter(bool logicalNameReferencing, InterfaceType type, bool useUtc2NormalTime,
+        string flagId) : base(logicalNameReferencing, type)
     {
-        //Image to update.
-        private string ImageUpdate = null;
-        //What is expected image size.
-        private UInt32 ImageSize = 0;
-
-        /// <summary>
-        /// Application is closing
-        /// </summary>
-        private ManualResetEvent closing = new ManualResetEvent(false);
-        /// <summary>
-        /// Server that is used to parse Gateway messages.
-        /// </summary>
-        public static GXDLMSMeter GatewayServer = null;
-
-        private static Dictionary<object, GXByteBuffer> buffers = new Dictionary<object, GXByteBuffer>();
-
-        /// <summary>
-        /// List of simulated meters.
-        /// </summary>
-        public static Dictionary<int, GXDLMSMeter> meters = new Dictionary<int, GXDLMSMeter>();
-
-        /// <summary>
-        /// List of gateway clients.
-        /// </summary>
-        public static Dictionary<int, GXDLMSClient> clients = new Dictionary<int, GXDLMSClient>();
-
-        /// <summary>
-        /// List of connections. This is used to close connection if meter is leave without diconnect.
-        /// </summary>
-        public static Dictionary<object, GXDLMSMeter> connections = new Dictionary<object, GXDLMSMeter>();
-
-        private static InterfaceType interfaceType;
-
-        //Are all meters using the same port.
-        private bool Exclusive;
-        private string objectsFile;
-        private static TraceLevel Trace = TraceLevel.Error;
-        /// <summary>
-        /// Lock settings file when used.
-        /// </summary>
-        private static object settingsLock = new object();
-
-        private IGXMedia Media = null;
-        /// <summary>
-        /// Serial number of the meter.
-        /// </summary>
-        private UInt32 serialNumber;
-
-        ///<summary>
-        /// Constructor.
-        ///</summary>
-        ///<param name="logicalNameReferencing">Is logical name referencing used.</param>
-        ///<param name="type">Interface type.</param>
-        ///<param name="useUtc2NormalTime">Is UTC time used.</param>
-        ///<param name="flagId">Flag ID.</param>
-        public GXDLMSMeter(bool logicalNameReferencing, InterfaceType type, bool useUtc2NormalTime,
-            string flagId) : base(logicalNameReferencing, type)
+        interfaceType = type;
+        UseUtc2NormalTime = useUtc2NormalTime;
+        FlaID = flagId;
+    }
+    public void Initialize(IGXMedia media,
+        TraceLevel trace,
+        string path,
+        UInt32 sn,
+        bool exclusive,
+        GXDLMSObjectCollection sharedObjects)
+    {
+        serialNumber = sn;
+        objectsFile = path;
+        Media = media;
+        Trace = trace;
+        Exclusive = exclusive;
+        // Each association has own conformance.
+        Conformance = Conformance.None;
+        if (sharedObjects != null)
         {
-            interfaceType = type;
-            UseUtc2NormalTime = useUtc2NormalTime;
-            FlaID = flagId;
+            Items.AddRange(sharedObjects);
         }
-        public void Initialize(IGXMedia media,
-            TraceLevel trace,
-            string path,
-            UInt32 sn,
-            bool exclusive,
-            GXDLMSObjectCollection sharedObjects)
+        Init(exclusive);
+    }
+
+    /// <summary>
+    /// Update simulated values for the meter instance.
+    /// </summary>
+    /// <param name="items">Simulated COSEM objects.</param>
+    private void UpdateValues(GXDLMSObjectCollection items)
+    {
+        //Update COSEM Logical Device Name
+        var d = items.FindByLN(ObjectType.Data, "0.0.42.0.0.255") as GXDLMSData;
+        if (d != null && d.Value is string v)
         {
-            serialNumber = sn;
-            objectsFile = path;
-            Media = media;
-            Trace = trace;
-            Exclusive = exclusive;
-            // Each association has own conformance.
-            Conformance = Conformance.None;
-            if (sharedObjects != null)
-            {
-                Items.AddRange(sharedObjects);
-            }
-            Init(exclusive);
+            d.Value = $"{v.Substring(0, 3)}{serialNumber.ToString("D13")}";
         }
 
-        /// <summary>
-        /// Update simulated values for the meter instance.
-        /// </summary>
-        /// <param name="items">Simulated COSEM objects.</param>
-        private void UpdateValues(GXDLMSObjectCollection items)
+        //Update Meter serial number.
+        d = items.FindByLN(ObjectType.Data, "0.0.96.1.0.255") as GXDLMSData;
+        if (d != null && d.Value is string v2)
         {
-            //Update COSEM Logical Device Name
-            var d = items.FindByLN(ObjectType.Data, "0.0.42.0.0.255") as GXDLMSData;
-            if (d != null && d.Value is string v)
+            var tmp = "";
+            foreach (var it in v2)
             {
-                d.Value = $"{v.Substring(0, 3)}{serialNumber.ToString("D13")}";
-            }
-
-            //Update Meter serial number.
-            d = items.FindByLN(ObjectType.Data, "0.0.96.1.0.255") as GXDLMSData;
-            if (d != null && d.Value is string v2)
-            {
-                var tmp = "";
-                foreach (var it in v2)
+                //Append chars.
+                if (it < 0x30 || it > 0x39)
                 {
-                    //Append chars.
-                    if (it < 0x30 || it > 0x39)
-                    {
-                        tmp += it;
-                    }
-                    else
-                    {
-                        break;
-                    }
+                    tmp += it;
                 }
-                d.Value = tmp + serialNumber.ToString("D" + Convert.ToString(v2.Length - tmp.Length));
-            }
-        }
-
-        /// <summary>
-        /// Load saved COSEM objects from XML.
-        /// </summary>
-        /// <param name="path">File path.</param>
-        public bool LoadObjects(string path, GXDLMSObjectCollection items)
-        {
-            lock (settingsLock)
-            {
-                if (File.Exists(path))
+                else
                 {
-                    var objects = GXDLMSObjectCollection.Load(path);
-                    items.Clear();
-                    items.AddRange(objects);
-                    //Add objects from profile generic that are not in association view.
-                    foreach (GXDLMSProfileGeneric pg in objects.GetObjects(ObjectType.ProfileGeneric))
-                    {
-                        //Remove invalid rows.
-                        for (var pos = 0; pos != pg.Buffer.Count; ++pos)
-                        {
-                            if (pg.Buffer[pos].Length != pg.CaptureObjects.Count)
-                            {
-                                pg.Buffer.RemoveAt(pos);
-                                --pos;
-                            }
-                        }
-
-                        pg.EntriesInUse = (UInt32)pg.Buffer.Count;
-                        foreach (GXKeyValuePair<GXDLMSObject, GXDLMSCaptureObject> it in pg.CaptureObjects)
-                        {
-                            if (objects.FindByLN(it.Key.ObjectType, it.Key.LogicalName) == null)
-                            {
-                                objects.Add(it.Key);
-                            }
-                        }
-                    }
-                    UpdateValues(items);
-                    return true;
+                    break;
                 }
             }
-            return false;
+            d.Value = tmp + serialNumber.ToString("D" + Convert.ToString(v2.Length - tmp.Length));
         }
+    }
 
-        /// <summary>
-        /// Client has send data for for the gateway.
-        /// </summary>
-        /// <remarks>
-        /// GW finds the correct client and sends data for it.
-        /// </remarks>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        public static void OnGatewayReceived(object sender, ReceiveEventArgs e)
+    /// <summary>
+    /// Load saved COSEM objects from XML.
+    /// </summary>
+    /// <param name="path">File path.</param>
+    public bool LoadObjects(string path, GXDLMSObjectCollection items)
+    {
+        lock (settingsLock)
         {
-            try
+            if (File.Exists(path))
             {
-                lock (buffers)
+                var objects = GXDLMSObjectCollection.Load(path);
+                items.Clear();
+                items.AddRange(objects);
+                //Add objects from profile generic that are not in association view.
+                foreach (GXDLMSProfileGeneric pg in objects.GetObjects(ObjectType.ProfileGeneric))
                 {
-                    GXByteBuffer bb;
-                    if (!buffers.ContainsKey(e.SenderInfo))
+                    //Remove invalid rows.
+                    for (var pos = 0; pos != pg.Buffer.Count; ++pos)
                     {
-                        bb = new GXByteBuffer();
-                        buffers[e.SenderInfo] = bb;
-                    }
-                    else
-                    {
-                        bb = buffers[e.SenderInfo];
-                    }
-                    bb.Set((byte[])e.Data);
-                    var sr = new GXServerReply(bb.Data);
-                    GatewayServer.Reset();
-                    try
-                    {
-                        GatewayServer.HandleRequest(sr);
-                        if (sr.Reply != null)
+                        if (pg.Buffer[pos].Length != pg.CaptureObjects.Count)
                         {
+                            pg.Buffer.RemoveAt(pos);
+                            --pos;
+                        }
+                    }
+
+                    pg.EntriesInUse = (UInt32)pg.Buffer.Count;
+                    foreach (GXKeyValuePair<GXDLMSObject, GXDLMSCaptureObject> it in pg.CaptureObjects)
+                    {
+                        if (objects.FindByLN(it.Key.ObjectType, it.Key.LogicalName) == null)
+                        {
+                            objects.Add(it.Key);
+                        }
+                    }
+                }
+                UpdateValues(items);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Client has send data for for the gateway.
+    /// </summary>
+    /// <remarks>
+    /// GW finds the correct client and sends data for it.
+    /// </remarks>
+    /// <param name="sender"></param>
+    /// <param name="e"></param>
+    public static void OnGatewayReceived(object sender, ReceiveEventArgs e)
+    {
+        try
+        {
+            lock (buffers)
+            {
+                GXByteBuffer bb;
+                if (!buffers.ContainsKey(e.SenderInfo))
+                {
+                    bb = new GXByteBuffer();
+                    buffers[e.SenderInfo] = bb;
+                }
+                else
+                {
+                    bb = buffers[e.SenderInfo];
+                }
+                bb.Set((byte[])e.Data);
+                var sr = new GXServerReply(bb.Data);
+                GatewayServer.Reset();
+                try
+                {
+                    GatewayServer.HandleRequest(sr);
+                    if (sr.Reply != null)
+                    {
+                        if (Trace > TraceLevel.Info)
+                        {
+                            Console.WriteLine("TX:\t" + GXCommon.ToHex(sr.Reply, true));
+                        }
+                        ((IGXMedia)sender).Send(sr.Reply, e.SenderInfo);
+                        return;
+                    }
+                }
+                catch (Exception)
+                {
+                    //Return error.
+                    sr.Reply = GatewayServer.ReportError(sr.Command, ErrorCode.HardwareFault);
+                }
+                if (sr.Gateway != null && sr.Data != null)
+                {
+                    var pdu = new GXByteBuffer(sr.Data);
+                    var type = (InterfaceType)sr.Gateway.NetworkId;
+                    var address = new GXByteBuffer();
+                    address.Set(sr.Gateway.PhysicalDeviceAddress);
+                    int addr = address.GetUInt8();
+                    //Find correct meter using GW information.
+                    if (meters.ContainsKey(addr))
+                    {
+                        //Find client for the server or create a new one.
+                        GXDLMSClient cl;
+                        if (!clients.ContainsKey(addr))
+                        {
+                            //Set client address if data is send without framing.
+                            if (GatewayServer.Settings.ClientAddress == 0)
+                            {
+                                GatewayServer.Settings.ClientAddress = 0x10;
+                            }
+                            cl = new GXDLMSClient(true, GatewayServer.Settings.ClientAddress, addr, GatewayServer.Authentication, null, type);
+                            clients.Add(addr, cl);
+                        }
+                        else
+                        {
+                            cl = clients[addr];
+                        }
+                        var data = new GXReplyData();
+                        var notify = new GXReplyData();
+                        var m = meters[addr];
+                        //Send SNRM if needed.
+                        if (sr.Command == Command.Aarq && (type == InterfaceType.HDLC || type == InterfaceType.HdlcWithModeE))
+                        {
+                            var sr2 = new GXServerReply(cl.SNRMRequest());
+                            m.HandleRequest(sr2);
+                            if (cl.GetData(sr2.Reply, data, notify))
+                            {
+                                data.Clear();
+                                notify.Clear();
+                            }
+                            else
+                            {
+                                //If the meter doesn't reply.
+                                bb.Clear();
+                                return;
+                            }
+                        }
+                        byte[][] frames = cl.CustomFrameRequest(Command.None, pdu);
+                        foreach (var it in frames)
+                        {
+                            sr.Data = it;
+                            m.HandleRequest(sr);
                             if (Trace > TraceLevel.Info)
                             {
-                                Console.WriteLine("TX:\t" + GXCommon.ToHex(sr.Reply, true));
+                                Console.WriteLine("RX:\t" + GXCommon.ToHex(sr.Reply, true));
                             }
-                            ((IGXMedia)sender).Send(sr.Reply, e.SenderInfo);
-                            return;
-                        }
-                    }
-                    catch (Exception)
-                    {
-                        //Return error.
-                        sr.Reply = GatewayServer.ReportError(sr.Command, ErrorCode.HardwareFault);
-                    }
-                    if (sr.Gateway != null && sr.Data != null)
-                    {
-                        var pdu = new GXByteBuffer(sr.Data);
-                        var type = (InterfaceType)sr.Gateway.NetworkId;
-                        var address = new GXByteBuffer();
-                        address.Set(sr.Gateway.PhysicalDeviceAddress);
-                        int addr = address.GetUInt8();
-                        //Find correct meter using GW information.
-                        if (meters.ContainsKey(addr))
-                        {
-                            //Find client for the server or create a new one.
-                            GXDLMSClient cl;
-                            if (!clients.ContainsKey(addr))
+                            data.RawPdu = true;
+                            if (cl.GetData(sr.Reply, data, notify))
                             {
-                                //Set client address if data is send without framing.
-                                if (GatewayServer.Settings.ClientAddress == 0)
+                                while (data.IsMoreData)
                                 {
-                                    GatewayServer.Settings.ClientAddress = 0x10;
-                                }
-                                cl = new GXDLMSClient(true, GatewayServer.Settings.ClientAddress, addr, GatewayServer.Authentication, null, type);
-                                clients.Add(addr, cl);
-                            }
-                            else
-                            {
-                                cl = clients[addr];
-                            }
-                            var data = new GXReplyData();
-                            var notify = new GXReplyData();
-                            var m = meters[addr];
-                            //Send SNRM if needed.
-                            if (sr.Command == Command.Aarq && (type == InterfaceType.HDLC || type == InterfaceType.HdlcWithModeE))
-                            {
-                                var sr2 = new GXServerReply(cl.SNRMRequest());
-                                m.HandleRequest(sr2);
-                                if (cl.GetData(sr2.Reply, data, notify))
-                                {
-                                    data.Clear();
-                                    notify.Clear();
-                                }
-                                else
-                                {
-                                    //If the meter doesn't reply.
-                                    bb.Clear();
-                                    return;
-                                }
-                            }
-                            byte[][] frames = cl.CustomFrameRequest(Command.None, pdu);
-                            foreach (var it in frames)
-                            {
-                                sr.Data = it;
-                                m.HandleRequest(sr);
-                                if (Trace > TraceLevel.Info)
-                                {
-                                    Console.WriteLine("RX:\t" + GXCommon.ToHex(sr.Reply, true));
-                                }
-                                data.RawPdu = true;
-                                if (cl.GetData(sr.Reply, data, notify))
-                                {
-                                    while (data.IsMoreData)
-                                    {
-                                        sr.Data = cl.ReceiverReady(data);
-                                        m.HandleRequest(sr);
-                                        if (Trace > TraceLevel.Info)
-                                        {
-                                            Console.WriteLine("RX:\t" + GXCommon.ToHex(sr.Reply, true));
-                                        }
-                                        cl.GetData(sr.Reply, data, notify);
-                                    }
-                                    var reply = sr.Reply;
-                                    try
-                                    {
-                                        var tmp = new GXByteBuffer();
-                                        tmp.Set(data.Data);
-                                        GatewayServer.Gateway = sr.Gateway;
-                                        reply = GatewayServer.CustomFrameRequest(Command.None, tmp);
-                                    }
-                                    finally
-                                    {
-                                        GatewayServer.Gateway = null;
-                                    }
+                                    sr.Data = cl.ReceiverReady(data);
+                                    m.HandleRequest(sr);
                                     if (Trace > TraceLevel.Info)
                                     {
-                                        Console.WriteLine("TX:\t" + GXCommon.ToHex(reply, true));
+                                        Console.WriteLine("RX:\t" + GXCommon.ToHex(sr.Reply, true));
                                     }
-                                    ((IGXMedia)sender).Send(reply, e.SenderInfo);
+                                    cl.GetData(sr.Reply, data, notify);
                                 }
-                            }
-                        }
-                        bb.Clear();
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                if (!(ex is SocketException))
-                {
-                    Console.WriteLine(ex.Message);
-                }
-            }
-        }
-
-        private static void HandleReply(GXByteBuffer bb, ReceiveEventArgs e)
-        {
-            try
-            {
-                lock (bb)
-                {
-                    int target, source;
-                    //All simulated meters are using the same interface type.
-                    GXDLMSTranslator.GetAddressInfo(interfaceType, bb, out target, out source);
-                    if (target != 0 && meters.ContainsKey(target))
-                    {
-                        var m = meters[target];
-                        var sr = new GXServerReply(bb.Data);
-                        sr.ConnectionInfo = new GXDLMSConnectionEventArgs() { ConnectionInfo = e.SenderInfo };
-                        do
-                        {
-                            m.HandleRequest(sr);
-                            //Reply is null if we do not want to send any data to the client.
-                            //This is done if client try to make connection with wrong device ID.
-                            if (sr.Reply != null)
-                            {
+                                var reply = sr.Reply;
+                                try
+                                {
+                                    var tmp = new GXByteBuffer();
+                                    tmp.Set(data.Data);
+                                    GatewayServer.Gateway = sr.Gateway;
+                                    reply = GatewayServer.CustomFrameRequest(Command.None, tmp);
+                                }
+                                finally
+                                {
+                                    GatewayServer.Gateway = null;
+                                }
                                 if (Trace > TraceLevel.Info)
                                 {
-                                    Console.WriteLine("TX:\t" + GXCommon.ToHex(sr.Reply, true));
+                                    Console.WriteLine("TX:\t" + GXCommon.ToHex(reply, true));
                                 }
-                                bb.Clear();
-                                m.Media.Send(sr.Reply, e.SenderInfo);
-                                sr.Data = null;
-                            }
-                        }
-                        while (sr.IsStreaming);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                if (!(ex is SocketException))
-                {
-                    Console.WriteLine(ex.Message);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Client has send data for the meters that are using the same port.
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        public static void OnExclusiveReceived(object sender, ReceiveEventArgs e)
-        {
-            try
-            {
-                if (Trace > TraceLevel.Info)
-                {
-                    Console.WriteLine("RX:\t" + GXCommon.ToHex((byte[])e.Data, true));
-                }
-                GXByteBuffer bb;
-                lock (buffers)
-                {
-                    if (!buffers.ContainsKey(e.SenderInfo))
-                    {
-                        bb = new GXByteBuffer();
-                        buffers[e.SenderInfo] = bb;
-                    }
-                    else
-                    {
-                        bb = buffers[e.SenderInfo];
-                    }
-                    lock (bb)
-                    {
-                        bb.Set((byte[])e.Data);
-                    }
-                }
-                //Each reply is handled in own thread.
-                new Thread(() =>
-                {
-                    HandleReply(bb, e);
-                }).Start();
-            }
-            catch (Exception ex)
-            {
-                if (!(ex is SocketException))
-                {
-                    Console.WriteLine(ex.Message);
-                }
-            }
-        }
-
-        private bool Init(bool exclusive)
-        {
-            //Load added objects.
-            if (objectsFile != null)
-            {
-                if (!LoadObjects(objectsFile, Items))
-                {
-                    throw new Exception($"Invalid device template file {objectsFile}");
-                }
-            }
-            GXDLMSObjectCollection objs;
-            //Find default local port setup when optical head is used.
-            if (InterfaceType == InterfaceType.HdlcWithModeE)
-            {
-                objs = Items.GetObjects(ObjectType.IecLocalPortSetup);
-                if (objs.Count != 0)
-                {
-                    LocalPortSetup = (GXDLMSIECLocalPortSetup)objs[0];
-                }
-                else
-                {
-                    LocalPortSetup = new GXDLMSIECLocalPortSetup();
-                    LocalPortSetup.ProposedBaudrate = BaudRate.Baudrate9600;
-                }
-            }
-            //Find default HDLC Setup settings.
-            objs = Items.GetObjects(ObjectType.IecHdlcSetup);
-            if (objs.Count != 0)
-            {
-                Hdlc = (GXDLMSHdlcSetup)objs[0];
-            }
-            //Find default Tcp/IP setup Setup settings.
-            objs = Items.GetObjects(ObjectType.TcpUdpSetup);
-            if (objs.Count != 0)
-            {
-                Wrapper = (GXDLMSTcpUdpSetup)objs[0];
-            }
-
-            //Update Logical Device Name so each meter has own unique name.
-            var data = (GXDLMSData)Items.FindByLN(ObjectType.Data, "0.0.42.0.0.255");
-            if (data != null)
-            {
-                data.Value = ASCIIEncoding.ASCII.GetBytes("GRX" + serialNumber);
-            }
-
-            //Create thread for every profile generic so values are captured if capture period is given.
-            new Thread(() =>
-            {
-                var wt = 0;
-                do
-                {
-                    wt = Run(closing);
-                    //Wait until next event needs to execute.
-                    // Console.WriteLine("Waiting " + TimeSpan.FromSeconds(wt).ToString() + " before next execution.");
-                    wt *= 1000;
-                    wt -= DateTime.Now.Millisecond;
-                }
-                while (!closing.WaitOne(wt));
-            }).Start();
-
-            //Own listener isn't created if there are multiple meters in the same port.
-            if (!exclusive)
-            {
-                Media.OnReceived += OnReceived;
-                Media.OnClientConnected += OnClientConnected;
-                Media.OnClientDisconnected += OnClientDisconnected;
-                Media.OnError += OnError;
-                Media.OnMediaStateChange += Media_OnMediaStateChange;
-            }
-            if (!Media.IsOpen)
-            {
-                Media.Open();
-            }
-            ///////////////////////////////////////////////////////////////////////
-            //Server must initialize after all objects are added.
-            Initialize();
-            return true;
-        }
-
-        private void Media_OnMediaStateChange(object sender, MediaStateEventArgs e)
-        {
-            if (e.State == MediaState.Closed && !closing.WaitOne(1))
-            {
-                if (sender is GXNet net)
-                {
-                    Console.WriteLine(DateTime.Now.ToShortTimeString() + " " + net.Port + " Closed.");
-                }
-            }
-        }
-
-        public override void Close()
-        {
-            closing.Set();
-            base.Close();
-            if (Media != null)
-            {
-                Media.Close();
-            }
-        }
-
-        public static void OnError(object sender, Exception ex)
-        {
-            Debug.WriteLine(ex.Message);
-        }
-
-        /// <summary>
-        /// Generic read handle for all servers.
-        /// Update dynamic values here.
-        /// </summary>
-        /// <param name="server"></param>
-        /// <param name="e"></param>
-        protected override void PreRead(ValueEventArgs[] args)
-        {
-            foreach (var it in args)
-            {
-                if (Trace > TraceLevel.Warning)
-                {
-                    Debug.WriteLine("PreRead {0}:{1}", it.Target.LogicalName, it.Index);
-                }
-                //Update date-time of the clock object when client asks it.
-                if ((it.Target is GXDLMSClock c) && it.Index == 2)
-                {
-                    c.Time = c.Now(UseUtc2NormalTime);
-                    //Set milliseconds to zero.
-                    c.Time.Value = c.Time.Value.AddMilliseconds(-c.Time.Value.Millisecond);
-                }
-            }
-        }
-
-        protected override void PostRead(ValueEventArgs[] args)
-        {
-            foreach (var it in args)
-            {
-                if (Trace > TraceLevel.Warning)
-                {
-                    Debug.WriteLine("PostRead {0}:{1}", it.Target.LogicalName, it.Index);
-                }
-            }
-        }
-
-        protected override void PreWrite(ValueEventArgs[] args)
-        {
-            foreach (var it in args)
-            {
-                if (Trace > TraceLevel.Warning)
-                {
-                    Debug.WriteLine("PreWrite {0}:{1}", it.Target.LogicalName, it.Index);
-                }
-            }
-        }
-
-        protected override void PostWrite(ValueEventArgs[] args)
-        {
-            var settings = new GXXmlWriterSettings();
-            foreach (var it in args)
-            {
-                if (it.Error != ErrorCode.Ok)
-                {
-                    // Load default values if user has try to save invalid data.
-                    Items.Clear();
-                    Items.AddRange(GXDLMSObjectCollection.Load(objectsFile));
-                    return;
-                }
-            }
-            Items.Save(objectsFile, settings);
-        }
-
-        protected override void InvalidConnection(GXDLMSConnectionEventArgs e)
-        {
-        }
-
-        private void SendPush(GXDLMSPushSetup target)
-        {
-            var pos = target.Destination.IndexOf(':');
-            if (pos == -1)
-            {
-                throw new ArgumentException("Invalid destination.");
-            }
-            byte[][] data = GeneratePushSetupMessages(DateTime.MinValue, target);
-            var host = target.Destination.Substring(0, pos);
-            var port = int.Parse(target.Destination.Substring(pos + 1));
-            var net = new GXNet(NetworkType.Tcp, host, port);
-            try
-            {
-                net.Open();
-                foreach (var it in data)
-                {
-                    net.Send(it, null);
-                }
-            }
-            finally
-            {
-                net.Close();
-            }
-        }
-
-        protected override void PreAction(ValueEventArgs[] args)
-        {
-            foreach (var it in args)
-            {
-                if (Trace > TraceLevel.Warning)
-                {
-                    Debug.WriteLine("PreAction {0}:{1}", it.Target.LogicalName, it.Index);
-                }
-                if ((it.Target is GXDLMSProfileGeneric pg) && it.Index == 2)
-                {
-                    //Update clock for profile-generic object when capture is invoked.
-                    foreach (GXKeyValuePair<GXDLMSObject, GXDLMSCaptureObject> co in pg.CaptureObjects)
-                    {
-                        if ((co.Key is GXDLMSClock clock) && co.Value.AttributeIndex == 2)
-                        {
-                            clock.Time = clock.Now();
-                        }
-                    }
-                }
-                if ((it.Target is GXDLMSPushSetup push) && it.Index == 1)
-                {
-                    //Send push msg.
-                    SendPush(push);
-                    it.Handled = true;
-                    continue;
-                }
-                if ((it.Target is GXDLMSAutoConnect ac) && it.Index == 1)
-                {
-                    //Connect for the give IP address.
-                    it.Handled = true;
-                    continue;
-                }
-
-
-                if (it.Target is GXDLMSImageTransfer)
-                {
-                    var i = it.Target as GXDLMSImageTransfer;
-                    //Image name and size to transfer
-                    if (it.Index == 1)
-                    {
-                        i.ImageTransferStatus = ImageTransferStatus.NotInitiated;
-                        i.ImageActivateInfo = null;
-                        ImageUpdate = ASCIIEncoding.ASCII.GetString((byte[])(it.Parameters as List<object>)[0]);
-                        ImageSize = Convert.ToUInt32((it.Parameters as List<object>)[1]);
-                        var file = Path.Combine(Path.GetDirectoryName(typeof(GXDLMSMeter).Assembly.Location), ImageUpdate + ".exe");
-                        Debug.WriteLine("Updating image" + ImageUpdate + " Size:" + ImageSize);
-                        using (var writer = File.Create(file))
-                        {
-                        }
-                    }
-                    //Transfers one block of the Image to the server
-                    else if (it.Index == 2)
-                    {
-                        i.ImageTransferStatus = ImageTransferStatus.TransferInitiated;
-                        var file = Path.Combine(Path.GetDirectoryName(typeof(GXDLMSMeter).Assembly.Location), ImageUpdate + ".exe");
-                        List<object> p = (List<object>)it.Parameters;
-                        try
-                        {
-                            using (var fs = new FileStream(file, FileMode.Append))
-                            {
-                                using (var writer = new BinaryWriter(fs))
-                                {
-                                    writer.Write((byte[])p[1]);
-                                }
-                                fs.Close();
-                            }
-                        }
-                        catch (IOException)
-                        {
-                            Thread.Sleep(1000);
-                            using (var fs = new FileStream(file, FileMode.Append))
-                            {
-                                using (var writer = new BinaryWriter(fs))
-                                {
-                                    writer.Write((byte[])p[1]);
-                                }
-                                fs.Close();
+                                ((IGXMedia)sender).Send(reply, e.SenderInfo);
                             }
                         }
                     }
-                    //Verifies the integrity of the Image before activation.
-                    else if (it.Index == 3)
-                    {
-                        var file = Path.Combine(Path.GetDirectoryName(typeof(GXDLMSMeter).Assembly.Location), ImageUpdate + ".exe");
-                        var init = i.ImageTransferStatus == ImageTransferStatus.TransferInitiated;
-                        if (init)
-                        {
-                            i.ImageTransferStatus = ImageTransferStatus.VerificationInitiated;
-                            //Check that size match.
-                            var size = (uint)new FileInfo(file).Length;
-                            if (size != ImageSize)
-                            {
-                                i.ImageTransferStatus = ImageTransferStatus.VerificationFailed;
-                                it.Error = ErrorCode.OtherReason;
-                            }
-                            else
-                            {
-                                var t = new Thread(() =>
-                                {
-                                    //Wait 5 seconds before image is verified.
-                                    Thread.Sleep(5000);
-                                    i.ImageTransferStatus = ImageTransferStatus.VerificationSuccessful;
-                                    Console.WriteLine("Image is verificated");
-                                });
-                                t.Start();
-                            }
-                        }
-                        if (i.ImageTransferStatus != ImageTransferStatus.VerificationFailed &&
-                            i.ImageTransferStatus != ImageTransferStatus.VerificationSuccessful)
-                        {
-                            Console.WriteLine("Image verification is on progress.");
-                            it.Error = ErrorCode.TemporaryFailure;
-                        }
-                    }
-                    //Activates the Image.
-                    else if (it.Index == 4)
-                    {
-                        var init = i.ImageTransferStatus == ImageTransferStatus.VerificationSuccessful;
-                        if (init)
-                        {
-                            i.ImageTransferStatus = ImageTransferStatus.ActivationInitiated;
-                            var t = new Thread(() =>
-                            {
-                                //Wait 5 seconds before image is activated.
-                                Thread.Sleep(5000);
-                                i.ImageTransferStatus = ImageTransferStatus.ActivationSuccessful;
-                                Console.WriteLine("Image is activated.");
-                            });
-                            t.Start();
-                        }
-                        //Wait 5 seconds before image is verified.
-                        if (i.ImageTransferStatus != ImageTransferStatus.ActivationFailed &&
-                            i.ImageTransferStatus != ImageTransferStatus.ActivationSuccessful)
-                        {
-                            Console.WriteLine("Image activation is on progress.");
-                            it.Error = ErrorCode.TemporaryFailure;
-                        }
-                    }
+                    bb.Clear();
                 }
             }
         }
-
-        protected override void PostAction(ValueEventArgs[] args)
+        catch (Exception ex)
         {
-            foreach (var it in args)
+            if (!(ex is SocketException))
             {
-                //Image update returns TemporaryFailure if image verify or acticvation is not finished.
-                if (it.Error != ErrorCode.Ok && !(it.Target is GXDLMSImageTransfer))
-                {
-                    // Load default values if user has try to save invalid data.
-                    Items.Clear();
-                    Items.AddRange(GXDLMSObjectCollection.Load(objectsFile));
-                    return;
-                }
-                // Save value if it's updated with action.
-                if (IsChangedWithAction(it.Target.ObjectType, it.Index))
-                {
-                    var settings = new GXXmlWriterSettings();
-                    Items.Save(objectsFile, settings);
-                }
-                if (it.Target is GXDLMSSecuritySetup && it.Index == 2)
-                {
-                    Debug.WriteLine("----------------------------------------------------------");
-                    Debug.WriteLine("Updated keys:");
-                    Debug.WriteLine("Server System title: " + GXDLMSTranslator.ToHex(Ciphering.SystemTitle));
-                    Debug.WriteLine("Authentication key: " + GXDLMSTranslator.ToHex(Ciphering.AuthenticationKey));
-                    Debug.WriteLine("Block cipher key: " + GXDLMSTranslator.ToHex(Ciphering.BlockCipherKey));
-                    Debug.WriteLine("Client System title: " + GXDLMSTranslator.ToHex(ClientSystemTitle));
-                    Debug.WriteLine("Master key (KEK) title: " + GXDLMSTranslator.ToHex(Kek));
-                }
+                Console.WriteLine(ex.Message);
             }
         }
+    }
 
-        /// <summary>
-        /// Our example server accept all connections.
-        /// </summary>
-        protected override bool IsTarget(int serverAddress, int clientAddress)
+    private static void HandleReply(GXByteBuffer bb, ReceiveEventArgs e)
+    {
+        try
         {
-            //Only one connection per meter at the time is allowed.
-            if (AssignedAssociation != null)
+            lock (bb)
             {
-                if (AssignedAssociation.ServerSAP == serverAddress &&
-                    AssignedAssociation.ClientSAP != clientAddress)
+                int target, source;
+                //All simulated meters are using the same interface type.
+                GXDLMSTranslator.GetAddressInfo(interfaceType, bb, out target, out source);
+                if (target != 0 && meters.ContainsKey(target))
                 {
-                    return false;
-                }
-                AssignedAssociation = null;
-            }
-            var ret = false;
-            //Check HDLC station address if it's used.
-            if (InterfaceType == InterfaceType.HDLC &&
-                    Hdlc != null && Hdlc.DeviceAddress != 0)
-            {
-                ret = Hdlc.DeviceAddress == serverAddress;
-            }
-            // Check server address using serial number.
-            if (!(serverAddress == 0x3FFF || serverAddress == 0x7F ||
-                (serverAddress & 0x3FFF) == serialNumber % 10000 + 1000))
-            {
-                // Find address from the SAP table.
-                var saps = Items.GetObjects(ObjectType.SapAssignment);
-                if (saps.Count != 0)
-                {
-                    foreach (GXDLMSSapAssignment sap in saps)
-                    {
-                        if (sap.SapAssignmentList.Count == 0)
-                        {
-                            ret = true;
-                            break;
-                        }
-                        foreach (KeyValuePair<UInt16, string> e in sap.SapAssignmentList)
-                        {
-                            // Check server address with two bytes.
-                            if ((serverAddress & 0xFFFF0000) == 0 && (serverAddress & 0x7FFF) == e.Key)
-                            {
-                                ret = true;
-                                break;
-                            }
-                            // Check server address with one byte.
-                            if ((serverAddress & 0xFFFFFF00) == 0 && (serverAddress & 0x7F) == e.Key)
-                            {
-                                ret = true;
-                                break;
-                            }
-                        }
-                        if (ret)
-                        {
-                            break;
-                        }
-                    }
-                }
-                else
-                {
-                    //Accept all server addresses if there is no SAP table available.
-                    ret = true;
-                }
-            }
-            if (ret)
-            {
-                AssignedAssociation = null;
-                foreach (GXDLMSAssociationLogicalName it in Items.GetObjects(ObjectType.AssociationLogicalName))
-                {
-                    if (it.ClientSAP == clientAddress)
-                    {
-                        AssignedAssociation = it;
-                        break;
-                    }
-                }
-            }
-            return ret;
-        }
-
-        protected override AccessMode GetAttributeAccess(ValueEventArgs arg)
-        {
-            return AssignedAssociation.GetAccess(arg.Target, arg.Index);
-        }
-        protected override AccessMode3 GetAttributeAccess3(ValueEventArgs arg)
-        {
-            return AssignedAssociation.GetAccess3(arg.Target, arg.Index);
-        }
-
-        /// <summary>
-        /// Get method access mode.
-        /// </summary>
-        /// <param name="arg"></param>
-        /// <returns>Method access mode</returns>
-        protected override MethodAccessMode GetMethodAccess(ValueEventArgs arg)
-        {
-            return AssignedAssociation.GetMethodAccess(arg.Target, arg.Index);
-        }
-
-        /// <summary>
-        /// Get method access mode.
-        /// </summary>
-        /// <param name="arg"></param>
-        /// <returns>Method access mode</returns>
-        protected override MethodAccessMode3 GetMethodAccess3(ValueEventArgs arg)
-        {
-            return AssignedAssociation.GetMethodAccess3(arg.Target, arg.Index);
-        }
-        /// <summary>
-        /// Check authentication.
-        /// </summary>
-        protected override SourceDiagnostic ValidateAuthentication(Authentication authentication, byte[] password)
-        {
-            if (UseLogicalNameReferencing)
-            {
-                if (AssignedAssociation != null)
-                {
-                    if (AssignedAssociation.AuthenticationMechanismName.MechanismId != authentication)
-                    {
-                        if (authentication == Authentication.None)
-                        {
-                            return SourceDiagnostic.AuthenticationRequired;
-                        }
-                        return SourceDiagnostic.AuthenticationFailure;
-                    }
-                    if (authentication != Authentication.Low)
-                    {
-                        // Other authentication levels are check later.
-                        return SourceDiagnostic.None;
-                    }
-                    if (GXCommon.EqualBytes(AssignedAssociation.Secret, password))
-                    {
-                        return SourceDiagnostic.None;
-                    }
-                    Debug.WriteLine("Invalid password. Expected: " + GXCommon.ToHex(AssignedAssociation.Secret) +
-                        " Actual: " + GXCommon.ToHex(password));
-                }
-            }
-            return SourceDiagnostic.AuthenticationFailure;
-        }
-
-        /// <summary>
-        /// All objects are static in our example.
-        /// </summary>
-        /// <param name="objectType"></param>
-        /// <param name="sn"></param>
-        /// <param name="ln"></param>
-        /// <returns></returns>
-        protected override GXDLMSObject FindObject(ObjectType objectType, int sn, string ln)
-        {
-            if (objectType == ObjectType.AssociationLogicalName)
-            {
-                foreach (var it in Items)
-                {
-                    if (it.ObjectType == ObjectType.AssociationLogicalName)
-                    {
-                        var a = (GXDLMSAssociationLogicalName)it;
-                        if (a.ClientSAP == Settings.ClientAddress
-                                && a.AuthenticationMechanismName.MechanismId == Settings.Authentication
-                                && (ln == a.LogicalName || ln == "0.0.40.0.0.255"))
-                        {
-                            return it;
-                        }
-                    }
-                }
-            }
-            // Find object from the active association view.
-            else if (AssignedAssociation != null)
-            {
-                return AssignedAssociation.ObjectList.FindByLN(objectType, ln);
-            }
-            return null;
-        }
-
-
-        /// <summary>
-        /// Client has close connection.
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        public static void OnClientDisconnected(object sender, ConnectionEventArgs e)
-        {
-            //Show trace only for one meter.
-            if (Trace > TraceLevel.Warning)
-            {
-                Console.WriteLine("TCP/IP connection closed.");
-            }
-            //Clear the buffer.
-            if (buffers.ContainsKey(e.Info))
-            {
-                buffers[e.Info].Clear();
-                buffers.Remove(e.Info);
-            }
-            if (connections.ContainsKey(e.Info))
-            {
-                connections[e.Info].Reset();
-                connections.Remove(e.Info);
-            }
-        }
-
-        /// <summary>
-        /// Client has made connection.
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        public static void OnClientConnected(object sender, ConnectionEventArgs e)
-        {
-            //Show trace only for one meter.
-            if (Trace > TraceLevel.Warning)
-            {
-                Console.WriteLine("TCP/IP connection established.");
-            }
-            //Clear the buffer.
-            if (buffers.ContainsKey(e.Info))
-            {
-                buffers[e.Info].Clear();
-            }
-            if (connections.ContainsKey(e.Info))
-            {
-                connections[e.Info].Reset();
-                connections.Remove(e.Info);
-            }
-        }
-
-        /// <summary>
-        /// Client has send data.
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        private void OnReceived(object sender, ReceiveEventArgs e)
-        {
-            try
-            {
-                lock (this)
-                {
-                    //Show trace only for connected meters.
-                    if (Trace > TraceLevel.Info && (ConnectionState != ConnectionState.None ||
-                        InterfaceType == InterfaceType.HdlcWithModeE))
-                    {
-                        Console.WriteLine("RX:\t" + GXCommon.ToHex((byte[])e.Data, true));
-                    }
-                    var sr = new GXServerReply((byte[])e.Data);
+                    var m = meters[target];
+                    var sr = new GXServerReply(bb.Data);
                     sr.ConnectionInfo = new GXDLMSConnectionEventArgs() { ConnectionInfo = e.SenderInfo };
                     do
                     {
-                        HandleRequest(sr);
+                        m.HandleRequest(sr);
                         //Reply is null if we do not want to send any data to the client.
                         //This is done if client try to make connection with wrong device ID.
                         if (sr.Reply != null)
                         {
-                            Media.Send(sr.Reply, e.SenderInfo);
                             if (Trace > TraceLevel.Info)
                             {
                                 Console.WriteLine("TX:\t" + GXCommon.ToHex(sr.Reply, true));
                             }
-                            if ((Media is GXSerial serial) && sr.NewBaudRate != 0)
-                            {
-                                if (ConnectionState == ConnectionState.Iec)
-                                {
-                                    serial.BaudRate = sr.NewBaudRate;
-                                    serial.DataBits = 8;
-                                    serial.Parity = Parity.None;
-                                    serial.StopBits = StopBits.One;
-                                    Console.WriteLine("Connected with optical probe. The new baudrate is: " + serial.BaudRate);
-                                }
-                                else
-                                {
-                                    Thread.Sleep(200);
-                                    //Reset optical probe default settings.
-                                    serial.BaudRate = sr.NewBaudRate;
-                                    serial.DataBits = 7;
-                                    serial.Parity = Parity.Even;
-                                    serial.StopBits = StopBits.One;
-                                    Console.WriteLine("Disconnected with optical probe. The new baudrate is: " + serial.BaudRate);
-                                }
-                            }
+                            bb.Clear();
+                            m.Media.Send(sr.Reply, e.SenderInfo);
                             sr.Data = null;
                         }
                     }
                     while (sr.IsStreaming);
                 }
             }
-            catch (Exception ex)
+        }
+        catch (Exception ex)
+        {
+            if (!(ex is SocketException))
             {
-                if (!(ex is SocketException))
+                Console.WriteLine(ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Client has send data for the meters that are using the same port.
+    /// </summary>
+    /// <param name="sender"></param>
+    /// <param name="e"></param>
+    public static void OnExclusiveReceived(object sender, ReceiveEventArgs e)
+    {
+        try
+        {
+            if (Trace > TraceLevel.Info)
+            {
+                Console.WriteLine("RX:\t" + GXCommon.ToHex((byte[])e.Data, true));
+            }
+            GXByteBuffer bb;
+            lock (buffers)
+            {
+                if (!buffers.ContainsKey(e.SenderInfo))
                 {
-                    Console.WriteLine(ex.Message);
+                    bb = new GXByteBuffer();
+                    buffers[e.SenderInfo] = bb;
+                }
+                else
+                {
+                    bb = buffers[e.SenderInfo];
+                }
+                lock (bb)
+                {
+                    bb.Set((byte[])e.Data);
                 }
             }
-        }
-
-        public override void PreGet(ValueEventArgs[] args)
-        {
-
-        }
-
-        public override void PostGet(ValueEventArgs[] args)
-        {
-        }
-
-        /// <summary>
-        /// Execute selected actions
-        /// </summary>
-        /// <param name="actions">List of actions to execute.</param>
-        protected override void Execute(List<KeyValuePair<GXDLMSObject, int>> actions)
-        {
-            foreach (var it in actions)
+            //Each reply is handled in own thread.
+            new Thread(() =>
             {
-                Console.WriteLine(DateTime.Now + " Executing: " + it.Key.ObjectType + " " + it.Key);
+                HandleReply(bb, e);
+            }).Start();
+        }
+        catch (Exception ex)
+        {
+            if (!(ex is SocketException))
+            {
+                Console.WriteLine(ex.Message);
             }
         }
+    }
 
-        protected override void Connected(GXDLMSConnectionEventArgs e)
+    private bool Init(bool exclusive)
+    {
+        //Load added objects.
+        if (objectsFile != null)
         {
-            if (e != null && e.ConnectionInfo != null)
+            if (!LoadObjects(objectsFile, Items))
             {
-                if (connections.ContainsKey(e.ConnectionInfo))
-                {
-                    connections[e.ConnectionInfo].Reset();
-                }
-                connections[e.ConnectionInfo] = this;
+                throw new Exception($"Invalid device template file {objectsFile}");
             }
+        }
+        GXDLMSObjectCollection objs;
+        //Find default local port setup when optical head is used.
+        if (InterfaceType == InterfaceType.HdlcWithModeE)
+        {
+            objs = Items.GetObjects(ObjectType.IecLocalPortSetup);
+            if (objs.Count != 0)
+            {
+                LocalPortSetup = (GXDLMSIECLocalPortSetup)objs[0];
+            }
+            else
+            {
+                LocalPortSetup = new GXDLMSIECLocalPortSetup();
+                LocalPortSetup.ProposedBaudrate = BaudRate.Baudrate9600;
+            }
+        }
+        //Find default HDLC Setup settings.
+        objs = Items.GetObjects(ObjectType.IecHdlcSetup);
+        if (objs.Count != 0)
+        {
+            Hdlc = (GXDLMSHdlcSetup)objs[0];
+        }
+        //Find default Tcp/IP setup Setup settings.
+        objs = Items.GetObjects(ObjectType.TcpUdpSetup);
+        if (objs.Count != 0)
+        {
+            Wrapper = (GXDLMSTcpUdpSetup)objs[0];
+        }
+
+        //Update Logical Device Name so each meter has own unique name.
+        var data = (GXDLMSData)Items.FindByLN(ObjectType.Data, "0.0.42.0.0.255");
+        if (data != null)
+        {
+            data.Value = ASCIIEncoding.ASCII.GetBytes("GRX" + serialNumber);
+        }
+
+        //Create thread for every profile generic so values are captured if capture period is given.
+        new Thread(() =>
+        {
+            var wt = 0;
+            do
+            {
+                wt = Run(closing);
+                //Wait until next event needs to execute.
+                // Console.WriteLine("Waiting " + TimeSpan.FromSeconds(wt).ToString() + " before next execution.");
+                wt *= 1000;
+                wt -= DateTime.Now.Millisecond;
+            }
+            while (!closing.WaitOne(wt));
+        }).Start();
+
+        //Own listener isn't created if there are multiple meters in the same port.
+        if (!exclusive)
+        {
+            Media.OnReceived += OnReceived;
+            Media.OnClientConnected += OnClientConnected;
+            Media.OnClientDisconnected += OnClientDisconnected;
+            Media.OnError += OnError;
+            Media.OnMediaStateChange += Media_OnMediaStateChange;
+        }
+        if (!Media.IsOpen)
+        {
+            Media.Open();
+        }
+        ///////////////////////////////////////////////////////////////////////
+        //Server must initialize after all objects are added.
+        Initialize();
+        return true;
+    }
+
+    private void Media_OnMediaStateChange(object sender, MediaStateEventArgs e)
+    {
+        if (e.State == MediaState.Closed && !closing.WaitOne(1))
+        {
+            if (sender is GXNet net)
+            {
+                Console.WriteLine(DateTime.Now.ToShortTimeString() + " " + net.Port + " Closed.");
+            }
+        }
+    }
+
+    public override void Close()
+    {
+        closing.Set();
+        base.Close();
+        if (Media != null)
+        {
+            Media.Close();
+        }
+    }
+
+    public static void OnError(object sender, Exception ex)
+    {
+        Debug.WriteLine(ex.Message);
+    }
+
+    /// <summary>
+    /// Generic read handle for all servers.
+    /// Update dynamic values here.
+    /// </summary>
+    /// <param name="server"></param>
+    /// <param name="e"></param>
+    protected override void PreRead(ValueEventArgs[] args)
+    {
+        foreach (var it in args)
+        {
             if (Trace > TraceLevel.Warning)
             {
-                Console.WriteLine("Client Connected.");
+                Debug.WriteLine("PreRead {0}:{1}", it.Target.LogicalName, it.Index);
+            }
+            //Update date-time of the clock object when client asks it.
+            if ((it.Target is GXDLMSClock c) && it.Index == 2)
+            {
+                c.Time = c.Now(UseUtc2NormalTime);
+                //Set milliseconds to zero.
+                c.Time.Value = c.Time.Value.AddMilliseconds(-c.Time.Value.Millisecond);
             }
         }
+    }
 
-        protected override void Disconnected(GXDLMSConnectionEventArgs e)
+    protected override void PostRead(ValueEventArgs[] args)
+    {
+        foreach (var it in args)
         {
-            if (Trace > TraceLevel.Warning && ConnectionState != ConnectionState.None)
+            if (Trace > TraceLevel.Warning)
             {
-                Console.WriteLine("Client Disconnected");
+                Debug.WriteLine("PostRead {0}:{1}", it.Target.LogicalName, it.Index);
             }
-            if (e != null && e.ConnectionInfo != null)
+        }
+    }
+
+    protected override void PreWrite(ValueEventArgs[] args)
+    {
+        foreach (var it in args)
+        {
+            if (Trace > TraceLevel.Warning)
             {
-                if (connections.ContainsKey(e.ConnectionInfo))
+                Debug.WriteLine("PreWrite {0}:{1}", it.Target.LogicalName, it.Index);
+            }
+        }
+    }
+
+    protected override void PostWrite(ValueEventArgs[] args)
+    {
+        var settings = new GXXmlWriterSettings();
+        foreach (var it in args)
+        {
+            if (it.Error != ErrorCode.Ok)
+            {
+                // Load default values if user has try to save invalid data.
+                Items.Clear();
+                Items.AddRange(GXDLMSObjectCollection.Load(objectsFile));
+                return;
+            }
+        }
+        Items.Save(objectsFile, settings);
+    }
+
+    protected override void InvalidConnection(GXDLMSConnectionEventArgs e)
+    {
+    }
+
+    private void SendPush(GXDLMSPushSetup target)
+    {
+        var pos = target.Destination.IndexOf(':');
+        if (pos == -1)
+        {
+            throw new ArgumentException("Invalid destination.");
+        }
+        byte[][] data = GeneratePushSetupMessages(DateTime.MinValue, target);
+        var host = target.Destination.Substring(0, pos);
+        var port = int.Parse(target.Destination.Substring(pos + 1));
+        var net = new GXNet(NetworkType.Tcp, host, port);
+        try
+        {
+            net.Open();
+            foreach (var it in data)
+            {
+                net.Send(it, null);
+            }
+        }
+        finally
+        {
+            net.Close();
+        }
+    }
+
+    protected override void PreAction(ValueEventArgs[] args)
+    {
+        foreach (var it in args)
+        {
+            if (Trace > TraceLevel.Warning)
+            {
+                Debug.WriteLine("PreAction {0}:{1}", it.Target.LogicalName, it.Index);
+            }
+            if ((it.Target is GXDLMSProfileGeneric pg) && it.Index == 2)
+            {
+                //Update clock for profile-generic object when capture is invoked.
+                foreach (GXKeyValuePair<GXDLMSObject, GXDLMSCaptureObject> co in pg.CaptureObjects)
                 {
-                    connections.Remove(e.ConnectionInfo);
+                    if ((co.Key is GXDLMSClock clock) && co.Value.AttributeIndex == 2)
+                    {
+                        clock.Time = clock.Now();
+                    }
                 }
+            }
+            if ((it.Target is GXDLMSPushSetup push) && it.Index == 1)
+            {
+                //Send push msg.
+                SendPush(push);
+                it.Handled = true;
+                continue;
+            }
+            if ((it.Target is GXDLMSAutoConnect ac) && it.Index == 1)
+            {
+                //Connect for the give IP address.
+                it.Handled = true;
+                continue;
+            }
+
+
+            if (it.Target is GXDLMSImageTransfer)
+            {
+                var i = it.Target as GXDLMSImageTransfer;
+                //Image name and size to transfer
+                if (it.Index == 1)
+                {
+                    i.ImageTransferStatus = ImageTransferStatus.NotInitiated;
+                    i.ImageActivateInfo = null;
+                    ImageUpdate = ASCIIEncoding.ASCII.GetString((byte[])(it.Parameters as List<object>)[0]);
+                    ImageSize = Convert.ToUInt32((it.Parameters as List<object>)[1]);
+                    var file = Path.Combine(Path.GetDirectoryName(typeof(GXDLMSMeter).Assembly.Location), ImageUpdate + ".exe");
+                    Debug.WriteLine("Updating image" + ImageUpdate + " Size:" + ImageSize);
+                    using (var writer = File.Create(file))
+                    {
+                    }
+                }
+                //Transfers one block of the Image to the server
+                else if (it.Index == 2)
+                {
+                    i.ImageTransferStatus = ImageTransferStatus.TransferInitiated;
+                    var file = Path.Combine(Path.GetDirectoryName(typeof(GXDLMSMeter).Assembly.Location), ImageUpdate + ".exe");
+                    List<object> p = (List<object>)it.Parameters;
+                    try
+                    {
+                        using (var fs = new FileStream(file, FileMode.Append))
+                        {
+                            using (var writer = new BinaryWriter(fs))
+                            {
+                                writer.Write((byte[])p[1]);
+                            }
+                            fs.Close();
+                        }
+                    }
+                    catch (IOException)
+                    {
+                        Thread.Sleep(1000);
+                        using (var fs = new FileStream(file, FileMode.Append))
+                        {
+                            using (var writer = new BinaryWriter(fs))
+                            {
+                                writer.Write((byte[])p[1]);
+                            }
+                            fs.Close();
+                        }
+                    }
+                }
+                //Verifies the integrity of the Image before activation.
+                else if (it.Index == 3)
+                {
+                    var file = Path.Combine(Path.GetDirectoryName(typeof(GXDLMSMeter).Assembly.Location), ImageUpdate + ".exe");
+                    var init = i.ImageTransferStatus == ImageTransferStatus.TransferInitiated;
+                    if (init)
+                    {
+                        i.ImageTransferStatus = ImageTransferStatus.VerificationInitiated;
+                        //Check that size match.
+                        var size = (uint)new FileInfo(file).Length;
+                        if (size != ImageSize)
+                        {
+                            i.ImageTransferStatus = ImageTransferStatus.VerificationFailed;
+                            it.Error = ErrorCode.OtherReason;
+                        }
+                        else
+                        {
+                            var t = new Thread(() =>
+                            {
+                                //Wait 5 seconds before image is verified.
+                                Thread.Sleep(5000);
+                                i.ImageTransferStatus = ImageTransferStatus.VerificationSuccessful;
+                                Console.WriteLine("Image is verificated");
+                            });
+                            t.Start();
+                        }
+                    }
+                    if (i.ImageTransferStatus != ImageTransferStatus.VerificationFailed &&
+                        i.ImageTransferStatus != ImageTransferStatus.VerificationSuccessful)
+                    {
+                        Console.WriteLine("Image verification is on progress.");
+                        it.Error = ErrorCode.TemporaryFailure;
+                    }
+                }
+                //Activates the Image.
+                else if (it.Index == 4)
+                {
+                    var init = i.ImageTransferStatus == ImageTransferStatus.VerificationSuccessful;
+                    if (init)
+                    {
+                        i.ImageTransferStatus = ImageTransferStatus.ActivationInitiated;
+                        var t = new Thread(() =>
+                        {
+                            //Wait 5 seconds before image is activated.
+                            Thread.Sleep(5000);
+                            i.ImageTransferStatus = ImageTransferStatus.ActivationSuccessful;
+                            Console.WriteLine("Image is activated.");
+                        });
+                        t.Start();
+                    }
+                    //Wait 5 seconds before image is verified.
+                    if (i.ImageTransferStatus != ImageTransferStatus.ActivationFailed &&
+                        i.ImageTransferStatus != ImageTransferStatus.ActivationSuccessful)
+                    {
+                        Console.WriteLine("Image activation is on progress.");
+                        it.Error = ErrorCode.TemporaryFailure;
+                    }
+                }
+            }
+        }
+    }
+
+    protected override void PostAction(ValueEventArgs[] args)
+    {
+        foreach (var it in args)
+        {
+            //Image update returns TemporaryFailure if image verify or acticvation is not finished.
+            if (it.Error != ErrorCode.Ok && !(it.Target is GXDLMSImageTransfer))
+            {
+                // Load default values if user has try to save invalid data.
+                Items.Clear();
+                Items.AddRange(GXDLMSObjectCollection.Load(objectsFile));
+                return;
+            }
+            // Save value if it's updated with action.
+            if (IsChangedWithAction(it.Target.ObjectType, it.Index))
+            {
+                var settings = new GXXmlWriterSettings();
+                Items.Save(objectsFile, settings);
+            }
+            if (it.Target is GXDLMSSecuritySetup && it.Index == 2)
+            {
+                Debug.WriteLine("----------------------------------------------------------");
+                Debug.WriteLine("Updated keys:");
+                Debug.WriteLine("Server System title: " + GXDLMSTranslator.ToHex(Ciphering.SystemTitle));
+                Debug.WriteLine("Authentication key: " + GXDLMSTranslator.ToHex(Ciphering.AuthenticationKey));
+                Debug.WriteLine("Block cipher key: " + GXDLMSTranslator.ToHex(Ciphering.BlockCipherKey));
+                Debug.WriteLine("Client System title: " + GXDLMSTranslator.ToHex(ClientSystemTitle));
+                Debug.WriteLine("Master key (KEK) title: " + GXDLMSTranslator.ToHex(Kek));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Our example server accept all connections.
+    /// </summary>
+    protected override bool IsTarget(int serverAddress, int clientAddress)
+    {
+        //Only one connection per meter at the time is allowed.
+        if (AssignedAssociation != null)
+        {
+            if (AssignedAssociation.ServerSAP == serverAddress &&
+                AssignedAssociation.ClientSAP != clientAddress)
+            {
+                return false;
+            }
+            AssignedAssociation = null;
+        }
+        var ret = false;
+        //Check HDLC station address if it's used.
+        if (InterfaceType == InterfaceType.HDLC &&
+            Hdlc != null && Hdlc.DeviceAddress != 0)
+        {
+            ret = Hdlc.DeviceAddress == serverAddress;
+        }
+        // Check server address using serial number.
+        if (!(serverAddress == 0x3FFF || serverAddress == 0x7F ||
+              (serverAddress & 0x3FFF) == serialNumber % 10000 + 1000))
+        {
+            // Find address from the SAP table.
+            var saps = Items.GetObjects(ObjectType.SapAssignment);
+            if (saps.Count != 0)
+            {
+                foreach (GXDLMSSapAssignment sap in saps)
+                {
+                    if (sap.SapAssignmentList.Count == 0)
+                    {
+                        ret = true;
+                        break;
+                    }
+                    foreach (KeyValuePair<UInt16, string> e in sap.SapAssignmentList)
+                    {
+                        // Check server address with two bytes.
+                        if ((serverAddress & 0xFFFF0000) == 0 && (serverAddress & 0x7FFF) == e.Key)
+                        {
+                            ret = true;
+                            break;
+                        }
+                        // Check server address with one byte.
+                        if ((serverAddress & 0xFFFFFF00) == 0 && (serverAddress & 0x7F) == e.Key)
+                        {
+                            ret = true;
+                            break;
+                        }
+                    }
+                    if (ret)
+                    {
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                //Accept all server addresses if there is no SAP table available.
+                ret = true;
+            }
+        }
+        if (ret)
+        {
+            AssignedAssociation = null;
+            foreach (GXDLMSAssociationLogicalName it in Items.GetObjects(ObjectType.AssociationLogicalName))
+            {
+                if (it.ClientSAP == clientAddress)
+                {
+                    AssignedAssociation = it;
+                    break;
+                }
+            }
+        }
+        return ret;
+    }
+
+    protected override AccessMode GetAttributeAccess(ValueEventArgs arg)
+    {
+        return AssignedAssociation.GetAccess(arg.Target, arg.Index);
+    }
+    protected override AccessMode3 GetAttributeAccess3(ValueEventArgs arg)
+    {
+        return AssignedAssociation.GetAccess3(arg.Target, arg.Index);
+    }
+
+    /// <summary>
+    /// Get method access mode.
+    /// </summary>
+    /// <param name="arg"></param>
+    /// <returns>Method access mode</returns>
+    protected override MethodAccessMode GetMethodAccess(ValueEventArgs arg)
+    {
+        return AssignedAssociation.GetMethodAccess(arg.Target, arg.Index);
+    }
+
+    /// <summary>
+    /// Get method access mode.
+    /// </summary>
+    /// <param name="arg"></param>
+    /// <returns>Method access mode</returns>
+    protected override MethodAccessMode3 GetMethodAccess3(ValueEventArgs arg)
+    {
+        return AssignedAssociation.GetMethodAccess3(arg.Target, arg.Index);
+    }
+    /// <summary>
+    /// Check authentication.
+    /// </summary>
+    protected override SourceDiagnostic ValidateAuthentication(Authentication authentication, byte[] password)
+    {
+        if (UseLogicalNameReferencing)
+        {
+            if (AssignedAssociation != null)
+            {
+                if (AssignedAssociation.AuthenticationMechanismName.MechanismId != authentication)
+                {
+                    if (authentication == Authentication.None)
+                    {
+                        return SourceDiagnostic.AuthenticationRequired;
+                    }
+                    return SourceDiagnostic.AuthenticationFailure;
+                }
+                if (authentication != Authentication.Low)
+                {
+                    // Other authentication levels are check later.
+                    return SourceDiagnostic.None;
+                }
+                if (GXCommon.EqualBytes(AssignedAssociation.Secret, password))
+                {
+                    return SourceDiagnostic.None;
+                }
+                Debug.WriteLine("Invalid password. Expected: " + GXCommon.ToHex(AssignedAssociation.Secret) +
+                                " Actual: " + GXCommon.ToHex(password));
+            }
+        }
+        return SourceDiagnostic.AuthenticationFailure;
+    }
+
+    /// <summary>
+    /// All objects are static in our example.
+    /// </summary>
+    /// <param name="objectType"></param>
+    /// <param name="sn"></param>
+    /// <param name="ln"></param>
+    /// <returns></returns>
+    protected override GXDLMSObject FindObject(ObjectType objectType, int sn, string ln)
+    {
+        if (objectType == ObjectType.AssociationLogicalName)
+        {
+            foreach (var it in Items)
+            {
+                if (it.ObjectType == ObjectType.AssociationLogicalName)
+                {
+                    var a = (GXDLMSAssociationLogicalName)it;
+                    if (a.ClientSAP == Settings.ClientAddress
+                        && a.AuthenticationMechanismName.MechanismId == Settings.Authentication
+                        && (ln == a.LogicalName || ln == "0.0.40.0.0.255"))
+                    {
+                        return it;
+                    }
+                }
+            }
+        }
+        // Find object from the active association view.
+        else if (AssignedAssociation != null)
+        {
+            return AssignedAssociation.ObjectList.FindByLN(objectType, ln);
+        }
+        return null;
+    }
+
+
+    /// <summary>
+    /// Client has close connection.
+    /// </summary>
+    /// <param name="sender"></param>
+    /// <param name="e"></param>
+    public static void OnClientDisconnected(object sender, ConnectionEventArgs e)
+    {
+        //Show trace only for one meter.
+        if (Trace > TraceLevel.Warning)
+        {
+            Console.WriteLine("TCP/IP connection closed.");
+        }
+        //Clear the buffer.
+        if (buffers.ContainsKey(e.Info))
+        {
+            buffers[e.Info].Clear();
+            buffers.Remove(e.Info);
+        }
+        if (connections.ContainsKey(e.Info))
+        {
+            connections[e.Info].Reset();
+            connections.Remove(e.Info);
+        }
+    }
+
+    /// <summary>
+    /// Client has made connection.
+    /// </summary>
+    /// <param name="sender"></param>
+    /// <param name="e"></param>
+    public static void OnClientConnected(object sender, ConnectionEventArgs e)
+    {
+        //Show trace only for one meter.
+        if (Trace > TraceLevel.Warning)
+        {
+            Console.WriteLine("TCP/IP connection established.");
+        }
+        //Clear the buffer.
+        if (buffers.ContainsKey(e.Info))
+        {
+            buffers[e.Info].Clear();
+        }
+        if (connections.ContainsKey(e.Info))
+        {
+            connections[e.Info].Reset();
+            connections.Remove(e.Info);
+        }
+    }
+
+    /// <summary>
+    /// Client has send data.
+    /// </summary>
+    /// <param name="sender"></param>
+    /// <param name="e"></param>
+    private void OnReceived(object sender, ReceiveEventArgs e)
+    {
+        try
+        {
+            lock (this)
+            {
+                //Show trace only for connected meters.
+                if (Trace > TraceLevel.Info && (ConnectionState != ConnectionState.None ||
+                                                InterfaceType == InterfaceType.HdlcWithModeE))
+                {
+                    Console.WriteLine("RX:\t" + GXCommon.ToHex((byte[])e.Data, true));
+                }
+                var sr = new GXServerReply((byte[])e.Data);
+                sr.ConnectionInfo = new GXDLMSConnectionEventArgs() { ConnectionInfo = e.SenderInfo };
+                do
+                {
+                    HandleRequest(sr);
+                    //Reply is null if we do not want to send any data to the client.
+                    //This is done if client try to make connection with wrong device ID.
+                    if (sr.Reply != null)
+                    {
+                        Media.Send(sr.Reply, e.SenderInfo);
+                        if (Trace > TraceLevel.Info)
+                        {
+                            Console.WriteLine("TX:\t" + GXCommon.ToHex(sr.Reply, true));
+                        }
+                        if ((Media is GXSerial serial) && sr.NewBaudRate != 0)
+                        {
+                            if (ConnectionState == ConnectionState.Iec)
+                            {
+                                serial.BaudRate = sr.NewBaudRate;
+                                serial.DataBits = 8;
+                                serial.Parity = Parity.None;
+                                serial.StopBits = StopBits.One;
+                                Console.WriteLine("Connected with optical probe. The new baudrate is: " + serial.BaudRate);
+                            }
+                            else
+                            {
+                                Thread.Sleep(200);
+                                //Reset optical probe default settings.
+                                serial.BaudRate = sr.NewBaudRate;
+                                serial.DataBits = 7;
+                                serial.Parity = Parity.Even;
+                                serial.StopBits = StopBits.One;
+                                Console.WriteLine("Disconnected with optical probe. The new baudrate is: " + serial.BaudRate);
+                            }
+                        }
+                        sr.Data = null;
+                    }
+                }
+                while (sr.IsStreaming);
+            }
+        }
+        catch (Exception ex)
+        {
+            if (!(ex is SocketException))
+            {
+                Console.WriteLine(ex.Message);
+            }
+        }
+    }
+
+    public override void PreGet(ValueEventArgs[] args)
+    {
+
+    }
+
+    public override void PostGet(ValueEventArgs[] args)
+    {
+    }
+
+    /// <summary>
+    /// Execute selected actions
+    /// </summary>
+    /// <param name="actions">List of actions to execute.</param>
+    protected override void Execute(List<KeyValuePair<GXDLMSObject, int>> actions)
+    {
+        foreach (var it in actions)
+        {
+            Console.WriteLine(DateTime.Now + " Executing: " + it.Key.ObjectType + " " + it.Key);
+        }
+    }
+
+    protected override void Connected(GXDLMSConnectionEventArgs e)
+    {
+        if (e != null && e.ConnectionInfo != null)
+        {
+            if (connections.ContainsKey(e.ConnectionInfo))
+            {
+                connections[e.ConnectionInfo].Reset();
+            }
+            connections[e.ConnectionInfo] = this;
+        }
+        if (Trace > TraceLevel.Warning)
+        {
+            Console.WriteLine("Client Connected.");
+        }
+    }
+
+    protected override void Disconnected(GXDLMSConnectionEventArgs e)
+    {
+        if (Trace > TraceLevel.Warning && ConnectionState != ConnectionState.None)
+        {
+            Console.WriteLine("Client Disconnected");
+        }
+        if (e != null && e.ConnectionInfo != null)
+        {
+            if (connections.ContainsKey(e.ConnectionInfo))
+            {
+                connections.Remove(e.ConnectionInfo);
             }
         }
     }

@@ -3,7 +3,6 @@
 public class MeterConfig
 {
     public int? Portnumber { get; set; }
-    public string TemplateFile { get; set; }
     public int ServerCount { get; set; } = 1;
     public string? Interface { get; set; }
     public string? Password { get; set; }
