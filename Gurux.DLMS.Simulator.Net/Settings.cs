@@ -45,7 +45,7 @@ internal class Settings
 {
     private const string PortnumberEnvName = "DLMS_SIMULATOR_PORT";
     private const string ServerCountEnvName = "DLMS_SIMULATOR_SERVER_COUNT";
-    private const string InterfaceEnvName = "DLMS_SIMULATOR_Interface";
+    private const string InterfaceEnvName = "DLMS_SIMULATOR_INTERFACE";
     private const string PasswordEnvName = "DLMS_SIMULATOR_PASSWORD";
     
     public readonly GXDLMSSecureClient Client = new(true);

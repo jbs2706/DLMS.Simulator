@@ -27,5 +27,9 @@
     <Content Include="dlms-meter-template.xml">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
+    <Content Include="hdlc-meter-template.xml">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Include="wrapper_meter_template.xml" />
   </ItemGroup>
 </Project>
