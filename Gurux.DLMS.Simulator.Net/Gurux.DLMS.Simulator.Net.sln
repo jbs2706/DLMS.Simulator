@@ -7,7 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Gurux.DLMS.Simulator.Net", 
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{F6F313CC-02FB-4D99-BDDA-4BA3AB9ED5C3}"
 	ProjectSection(SolutionItems) = preProject
-		compose.yaml = compose.yaml
+		.run\HDLC_Gurux.DLMS.Simulator.Net.run.xml = .run\HDLC_Gurux.DLMS.Simulator.Net.run.xml
+		.run\WRAPPER_Gurux.DLMS.Simulator.Net.run.xml = .run\WRAPPER_Gurux.DLMS.Simulator.Net.run.xml
 	EndProjectSection
 EndProject
 Global
